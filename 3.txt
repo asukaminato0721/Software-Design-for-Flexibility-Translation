@@ -1,0 +1,751 @@
+3 算术主题的变种
+
+ 在这一章中，我们介绍了预测分配的泛型程序这一极其强大但有潜在危险的灵活性技术。我们从相对平静的算术水域开始，调节运算符的含义。
+我们首先将算术推广到处理符号代数表达式，然后再推广到函数。我们使用一个组合器系统，其中被组合的元素是算术运算的包。
+但很快我们就想要更多的灵活性。所以我们发明了动态可扩展的通用程序，其中处理程序的适用性是由提供的参数的谓词决定的。这非常强大，也非常有趣。使用泛型程序来扩展算术，对 "差分对象 "进行操作，我们只需做很少的工作就能得到自动差分。谓词调度是相当昂贵的，所以我们研究如何改善这一费用。在这个过程中，我们发明了一种标签数据，其中标签只是一种记忆谓词值的方式。
+在本章的最后，我们通过设计一个简单的、易于阐述的冒险游戏来展示泛型程序的力量。
+
+3.1.1 一个简单的ODE积分器
+
+ 微分方程是对系统状态随着自变量的变化而变化的描述；这被称为系统状态的演化。这个近似的过程被称为数值积分。
+让我们研究一下二阶常微分方程的数值积分器的数值运算的通用性。我们将使用一个积分器，它以统一的时间间隔对其自变量进行采样，每一个采样点被称为一个步骤。
+考虑一下这个方程。(3.1)
+
+其基本思想是，对未知函数的二阶导数的离散近似是一些先前步骤的二阶导数的线性组合。具体的系数是通过数值分析来选择的，在此不作讨论。
+其中h是步长，A是魔法系数阵列。
+例如，Stormer的2阶积分器是（3.2）（3.3）
+
+为了用它来计算x的未来，我们写一个程序。stormer-2返回的程序是一个给定函数和步长的积分器，给定x的历史值，产生x在下一个时间的估计值，x(t+h)。程序t和x从历史中提取以前的时间和x的值。(x 0 history))返回x(t)，(x 1 history))返回x(t - h)，(x 2 history))返回x(t - 2h)。我们以类似的方式从历史中获取一个步骤的时间。(t 1 history))返回t - h。
+
+(define (stormer-2 F h) (lambda (history) (+ (* 2 (x 0 history)) (* -1 (x 1 history)) (* (/ (expt h 2) 12) (+ (* 13 (F (t 0 history) (x 0 history)) (* -2 (F (t 1 history) (x 1 history)) (F (t 2 history) (x 2 history ))))))) 
+
+由stepper返回的程序接收一个历史，并返回一个由h推进的新历史，用于给定的积分器。
+
+(define (stepper h integrator) (lambda (history) (extend-history (+ (t 0 history) h) (integrator history) history) )) 
+
+程序步进器在程序演化器中用来产生一个程序步骤，将历史推进一步。
+步骤程序用于程序evolve，使历史按给定的h大小的步数前进。2 
+
+(define (evolver F h make-integrator) (let ((integrator (make-integrator F h))) (let ((step (stepper h integrator))) (define (evolve history n-steps) (if (n:> n-steps 0) (evolve (step history) (n:- n-steps 1)) history) evolve) )
+
+像方程3.1这样的二阶微分方程一般需要两个初始条件来确定唯一的轨迹：x(t0 )和x(t0 )足以得到所有t的x(t)。但我们使用的Stormer多步积分器需要三个历史值，x(t0)，x(t0 - h)，和x(t0 - 2h)，以计算下一个值x(t0 + h)。因此，为了用这个积分器演化轨迹，我们必须从一个有三个过去的x值的初始历史开始。
+考虑一下非常简单的微分方程。
+
+在方程3.1所示的形式中，右手边是：
+
+(define (F t x) (- x))
+
+因为这个方程的所有解都是正弦函数的线性组合，我们可以通过用三个正弦函数的值初始化历史得到简单的正弦函数：
+
+(define numeric-s0
+(make-initial-history 0 .01 (sin 0) (sin -.01) (sin -.02)))
+
+其中make-initial-history程序需要以下参数。
+
+(make-initial-history t h x(t) x(t - h) x(t - 2h))
+
+使用Scheme的内置算术，经过100步的h=.01大小，我们得到了sin(1)的良好近似值：
+
+(x 0 ((evolver F .01 stormer-2) numeric-s0 100)) 
+
+.8414709493275624 
+
+(sin 1) 
+
+.8414709848078965
+
+3.1.2 修改算术运算符
+
+ 让我们考虑一下修改加法、乘法等含义的可能性，以适应我们例子中的程序员无法想象的新数据类型。假设我们改变我们的算术运算符来操作和产生符号表达式，而不是数字值。这在调试纯数值计算时很有用，因为如果我们提供符号参数，我们可以检查产生的符号表达式，以确保程序正在计算我们想要的东西。这也可以作为优化数字程序的部分评估器的基础。
+下面是实现这一目标的一种方法。我们介绍一下算术包的概念。一个算术包，或只是算术，是一个从运算符名称到它们的操作（实现）的映射。
+我们可以在用户的read-eval-print环境中安装一个算术包，用算术包的实现替换算术包中的运算符的默认绑定。
+过程make-arithmetic-1生成了一个新的算术包。它需要一个新算术的名称，以及一个操作生成程序，该程序给定一个运算符的名称，为该运算符构造一个操作，这里是一个处理程序。程序make-arithmetic-1通过每个算术运算符调用操作生成器程序，将结果累积到一个新的算术包中。对于符号算术，操作被实现为一个过程，该过程通过将运算符名称连接到其参数列表中来创建一个符号表达式。
+
+(define symbolic-arithmetic-1 (make-arithmetic-1 'symbolic (lambda (operator) (lambda args (cons operator args))))))
+
+为了使用这个新定义的算术，我们安装它。这就重新定义了算术运算符，以使用这个算术：3
+
+(install-arithmetic! symbolic-arithmetic-1)
+  
+install-arithmetic! 将用户的全局变量的值，即算术中定义的算术运算符的名称，改为该算术中的值。例如，这样安装后。
+(+ 'a 'b) 
+(+ a b) 
+(+ 1 2) 
+(+ 1 2)
+现在我们可以观察到采取Stormer进化的一步的结果。4 5 
+
+(pp (x 0
+((evolver F ’h stormer-2)
+(make-initial-history 't ’h ’xt ’xt-h ’xt-2h)
+1)))
+(+ (+ (* 2 xt) (* -1 xt-h))
+(* (/ (expt h 2) 12)
+(+ (+ (* 13 (negate xt)) (* -2 (negate xt-h)))
+(negate xt-2h))))
+
+我们可以通过用代数化简器取代 symbolic-arithmetic-1 中的 cons 来轻松地产生简化的表达式，然后我们就有了一个符号操纵器。(我们将在第4.2节中探讨代数简化。)这种转换简单得令人发指，然而我们最初的设计并没有为符号计算做任何规定。我们可以很容易地增加对矢量算术、矩阵算术的支持，等等。
+
+重新定义运算符的问题
+
+事后重新定义运算符的能力既提供了极大的灵活性，也提供了制造全新的错误类别的方法！（我们在 evolver 程序中预见到了这样的问题，并通过使用特殊的算术运算符n:>和n:-来计算步数而避免了这个问题.）
+还有一些更微妙的问题。一个依赖于整数运算的精确性的程序，对于不精确的浮点数可能无法正常工作。这正是生物或技术系统进化过程中的风险--有些突变会是致命的！这也是为什么有些突变会被认为是致命的。另一方面，有些突变将是非常有价值的。但是，这种风险必须与狭窄和脆弱的结构的成本相平衡。
+事实上，当原始程序可以被重新定义时，可能不可能对一个程序进行很好的证明，除了它在被限制在它所定义的类型时可以工作。这是一条容易但危险的泛化之路。
+
+3.1.3 结合算术
+
+符号算术不能进行数值计算，所以我们通过替换运算符的定义来打破我们的整合例子。我们真正希望运算符的动作取决于它的参数：例如，数字加法用于（+ 1 2），但构建列表用于（+ 'a 'b）。因此，算术包必须能够确定哪个处理程序适合所提供的参数。
+
+改进的算术抽象
+
+通过用适用性规范（通常简称为适用性）来注释每个操作，我们可以结合不同种类的算术。例如，我们可以把符号算术和数字算术结合起来，这样一个结合的操作可以确定哪种实现适合它的参数。
+一个适用性规范只是一个案例的列表，每个案例都是一个谓词的列表，如数字？ 或符号？如果一个程序的参数满足其中一个情况，即如果情况中的每个谓词对相应的参数都是真的，那么该程序就被认为适用于一串参数。例如，对于二进制算术运算符，我们希望数字运算只适用于(number?number?)的情况，而符号运算则适用于这些情况：((number?symbolic?)(symbolic?number?)(symbolic?symbolic?)。
+我们使用make-operation来制作一个操作，其中包括处理程序的适用性，像这样：
+
+(define (make-operation operator applicability procedure)
+(list ’operation operator applicability procedure))
+
+然后可以得到一个操作的适用性：
+
+(define (operation-applicability operation)
+(caddr operation))
+
+我们引入了一个抽象概念，用于为一个操作编写适用性信息。过程all-args接受两个参数，第一个是操作接受的参数数量（它的arity，如第26页），第二个是每个参数必须为真的谓词。它返回一个适用性说明，可以用来确定该操作是否适用于提供给它的参数。在一个数字运算中，每个运算的每个参数都需要数字。
+
+使用all-args，我们可以为最简单的操作实现一个操作构造器：
+
+(define (simple-operation operator predicate procedure)
+(make-operation operator
+(all-args (operator-arity operator)
+predicate)
+procedure))
+
+我们也会发现有一个领域谓词是有用的，这个谓词对于给定算术的操作作为参数的对象（如函数或矩阵）来说是真的--例如，数字算术的number?为了支持这个更详细的想法，我们将为算术包创建一个构造函数make-arithmetic。这个过程make-arithmetic与make-arithmetic-1（见第71页）相似，但有额外的参数。
+
+
+(make-arithmetic name domain-predicate base-arithmetic-packages map-of-constant-name-to-constant map-of-operator-name-to-operation)
+
+ 一个由make-arithmetic产生的算术包有一个对调试有用的名字。它有上面提到的领域谓词。它有一个算术包的列表，称为基数，新的算术将从这个列表中构建。此外，算术将包含一组命名的常数，和一组运算符及其相应的操作。最后两个参数被用来生成这些集合。
+使用基数算术的一个例子是向量。一个向量被表示为一个有序的坐标序列：因此，向量的算术是以其坐标的算术来定义的。因此，一个向量算术的基础算术是该向量坐标的适当算术。数字坐标的向量算术将使用数字算术作为其基数，而符号坐标的向量算术将使用符号算术作为其基数。为了简洁起见，我们经常使用 "超过 "一词来指定基数，如 "向量超过数字 "或 "向量超过符号"。
+
+基数运算法则也决定了派生运算法则将定义的常数和运算符。定义的常数将是基数定义的常数的联合，而定义的运算符将是其运算符的联合。如果没有基数，那么将定义常量和运算符名称的标准集。
+
+利用这些新的能力，我们可以定义一个带有适用性信息的数字算术。由于数字算术是建立在Scheme基底上的，所以Scheme数字参数的运算符的适当处理程序只是Scheme实现的运算符的值。另外，某些符号，如加法和乘法的身份常数，被特别映射。
+
+(define numeric-arithmetic
+(make-arithmetic ’numeric number? ’()
+(lambda (name)
+ ;constant generator
+(case name
+((additive-identity) 0)
+((multiplicative-identity) 1)
+(else (default-object))))
+(lambda (operator)
+ ;operation generator
+(simple-operation operator number?
+(get-implementation-value
+(operator->procedure-name operator))))))
+
+这段代码的最后两行找到了由操作符命名的Scheme实现所定义的程序。6 我们可以类似地写出符号扩展器构造函数，在给定算式的基础上构造一个符号算式。
+
+(define (symbolic-extender base-arithmetic) (make-arithmetic 'symbolic symbolic? (list base-arithmetic) (lambda (name base-constant) ;constant generator base-constant) (let ((base-predicate (arithmetic-domain-predicate base-arithmetic))) (lambda (operator base-operation) ;operation generator (make-operation operator (any-arg (operator-arity operator) symbolic? base-predicate) (lambda args (cons operator args )))))))
+
+这与数字算术的一个区别是，只要任何参数是一个符号表达式，符号算术就适用。7 这一点通过使用any-arg而不是all-args来表示；如果至少有一个参数满足作为第二个参数传递的谓词，并且所有其他参数都满足作为第三个参数传递的谓词，那么any-arg就匹配。8 还要注意的是，这个符号算术是基于一个提供的基数算术，这将允许我们建立各种这样的算术。
+适用性规范不是作为处理程序的防护措施：它们不能防止处理程序应用于错误的参数。适用性规范仅用于区分运算符在组合算术时的可能操作，如下文所述。
+
+算术的组合器
+
+符号算术和数字算术在结构上具有相同的形状。 symbolic-extender 程序产生的算术与它所给的基础算术具有相同的运算符。制作一个组合器语言，从部分算术中构建复合算术，可能是一个好方法。
+下面的程序add-arithmetics是一个算术的组合器。它制造一个新的算术，其领域谓词是给定算术的领域谓词的二择一，其每个运算符被映射为给定算术的运算的联合。
+
+(define (add-arithmetics . arithmetics)
+(add-arithmetics* arithmetics))
+(define (add-arithmetics* arithmetics)
+(if (n:null? (cdr arithmetics))
+(car arithmetics) ;only one arithmetic
+(make-arithmetic ’add
+(disjoin*
+(map arithmetic-domain-predicate
+arithmetics))
+arithmetics
+constant-union
+operation-union)))
+
+make-arithmetic的第三个参数是一个被合并的算术包的列表。这些算术包必须是兼容的，因为它们为相同的命名运算符指定了操作。第四个参数是constant-union，它结合了多个常数。在这里，它选择了一个参数常量用于组合算术；稍后我们将对此进行详细说明。
+
+(define (constant-union name . constants)
+(let ((unique
+(remove default-object?
+(delete-duplicates constants eqv?))))
+(if (n:pair? unique)
+(car unique)
+(default-object))))
+
+最后一个参数是operation-union，它在产生的算术中为命名的运算符构造运算。如果一个操作适用于任何被组合的算术，那么它就适用。
+
+(define (operational-union operator . operations) (operational-union* operator operations)) (define (operational-union* operator operations) (make-operation operator (applicability-union* (map operation-applicability operations)) (lambda args (operation-union-dispatch operator operations args))))
+
+ 过程operational-union-dispatch必须根据提供的参数来确定要使用的操作。它从给定的算术中选择适合给定参数的操作，并将其应用于参数。如果多于一个给定的算术有适用的操作，则选择add-arithmetics参数中第一个算术的操作。
+ 
+(define (operation-union-dispatch operator operations args) (let ((operation (find (lambda (operation) (is-operation-applicable? operation args)) operations)) (if (not operation) (error "Inapplicable operation:" operator args) (apply-operation operation args)))
+
+一个常见的模式是将一个基础算术与该算术的扩展器结合起来。数字算术和建立在数字算术上的符号算术的组合就是这样的情况。所以我们为这种模式提供了一个抽象：
+
+(define (extend-arithmetic extender base-arithmetic)
+(add-arithmetics base-arithmetic
+(extender base-arithmetic)))
+
+我们可以使用extend-arithmetic来结合数字算术和符号算术。由于适用情况是不相连的--数字算术的所有数字和符号算术的至少一个符号表达式--除了可能的性能问题，add-arithmetics的参数顺序在这里是不相关的。
+
+(define combined-arithmetic (extend-arithmetic symbolic-extender numeric-arithmetic)) 
+(install-arithmetic! combined-arithmetic)
+
+ 让我们试试复合算术。
+ (+ 1 2)
+3
+(+ 1 ’a)
+(+ 1 a)
+(+ ’a 2)
+(+ a 2)
+(+ ’a ’b)
+(+ a b)
+积分器仍然在数字上工作（比较第70页）：
+(define numeric-s0
+(make-initial-history 0 .01 (sin 0) (sin -.01) (sin -.02)))
+(x 0 ((evolver F .01 stormer-2) numeric-s0 100))
+.8414709493275624
+
+ 它以符号方式工作（比较第72页）：
+ 
+ (pp (x 0
+((evolver F ’h stormer-2)
+(make-initial-history 't ’h ’xt ’xt-h ’xt-2h)
+1)))
+(+ (+ (* 2 xt) (* -1 xt-h))
+(* (/ (expt h 2) 12)
+(+ (+ (* 13 (negate xt)) (* -2 (negate xt-h)))
+(negate xt-2h))))
+
+而它的工作原理是结合在一起的，有数字历史但有符号步长h：
+
+（pp (x 0 ((evolver F 'h stormer-2) numeric-s0 1))) (+ 9.999833334166664-3 (* (/ (expt h 2) 12) -9.999750002487318-7) 
+
+注意这里的力量。我们结合了可以做符号运算的代码和可以做数字运算的代码。我们创建了一个系统，可以做依赖于两种能力的算术。这不仅仅是两种能力的结合--它是两种机制的合作，以解决一个自己都无法解决的问题。
+
+3.1.4 关于函数的算术
+
+传统数学将关于数字量的算术扩展到许多其他种类的对象。几个世纪以来，"算术 "已被扩展到复数、向量、线性变换及其作为矩阵的表示等。一个特别有启示意义的扩展是对函数的扩展。我们可以使用算术运算符来组合相同类型的函数。(f + g)(x) = f (x) + g(x) (f - g)(x) = f (x) - g(x) (fg)(x) = f (x)g(x) (f/g)(x) = f (x)/g(x) ⋮ 被组合的函数必须有相同的域和密码域，而且必须在密码域上定义一个算数。
+对函数的扩展并不难。给出一个我们希望结合的函数的密码域的算术包，我们可以制作一个实现函数算术的算术包，假设函数是作为过程实现的。
+
+(define (pure-function-extender codomain-arithmetic)
+(make-arithmetic ’pure-function function?
+(list codomain-arithmetic)
+(lambda (name codomain-constant)
+ ; *** see below
+(lambda args codomain-constant))
+(lambda (operator codomain-operation)
+(simple-operation operator function?
+(lambda functions
+(lambda args
+(apply-operation codomain-operation
+(map (lambda (function)
+(apply function args))
+functions))))))))
+
+ 注意，常数发生器（带注释*** ）必须为每个共域常数产生一个常数函数。例如，函数的加法同一性必须是任何数量的参数的函数，它返回共域的加法同一性。将函数式算术与对子域进行操作的算术结合起来，就形成了一个有用的软件包：
+ 
+(install-arithmetic!
+(extend-arithmeticpure-function-extender
+numeric-arithmetic))
+((+ cos sin) 3)
+-.8488724885405782
+(+ (cos 3) (sin 3))
+-.8488724885405782
+
+通过在 combined-arithmetic 的基础上，我们可以得到更有趣的结果： 
+
+(install-arithmetic!
+(extend-arithmetic pure-function-extender
+combined-arithmetic))
+((+ cos sin) 3)
+-.8488724885405782
+((+ cos sin) ’a)
+(+ (cos a) (sin a))
+(* ’b ((+ cos sin) (+ (+ 1 2) ’a)))
+(* b (+ (cos (+ 3 a)) (sin (+ 3 a))))
+
+ 数学传统也允许人们将数字量与函数混合，方法是将数字量视为与将与之结合的函数相同类型的常数函数。
+(3.4) 
+
+我们可以很容易地实现数字量与常数函数的联合，只需对程序pure-function-extender稍作修改：
+
+(define (function-extender codomain-arithmetic)
+(let ((codomain-predicate
+(arithmetic-domain-predicate codomain-arithmetic)))
+(make-arithmetic ’function
+(disjoin codomain-predicate function?)
+(list codomain-arithmetic)
+(lambda (name codomain-constant)
+codomain-constant)
+(lambda (operator codomain-operation)
+(make-operation operator
+(any-arg (operator-arity operator)
+function?
+codomain-predicate)
+(lambda things
+(lambda args
+(apply-operation codomain-operation
+(map (lambda (thing)
+;; here is the coercion:
+(if (function? thing)
+(apply thing args)
+thing))
+things)))))))))
+
+为了允许共域量（如数字）与常数函数的联合，新函数运算的域必须同时包含函数和函数共域的元素（函数的可能值）。如果任何一个参数是一个函数，那么运算器的实现是适用的；而函数则应用于所给的参数。请注意，用于make-arithmetic的常数生成器不需要将模域常数重写为函数，因为常数现在可以直接使用。
+通过这个版本，我们可以
+
+(install-arithmetic!
+(extend-arithmetic function-extender combined-arithmetic))
+((+ 1 cos) ’a)
+(+ 1 (cos a))
+(* ’b ((+ 4 cos sin) (+ (+ 1 2) ’a)))
+(* b (+ 4 (cos (+ 3 a)) (sin (+ 3 a))))
+
+这提出了一个有趣的问题：我们有符号，如a和b，代表字面数字，但没有任何东西代表字面函数。例如，如果我们写
+
+(* 'b ((+ 'c cos sin) (+ 3 'a))
+
+我们的算术将把c作为一个字面数字。但我们可能希望c是一个字面函数，作为一个函数组合。在我们目前的设计中很难做到这一点，因为c没有携带类型信息，而且上下文也不足以区分用途。
+但是我们可以做一个除了名字以外没有任何属性的字面函数。这样的函数只是把它的名字附在它的参数列表上。
+
+(define (literal-function name) (lambda args (cons name args))
+
+有了这个定义，我们可以让一个字面函数c正确地与其他函数结合：
+
+(* ’b ((+ (literal-function ’c) cos sin) (+ (+ 1 2) ’a)))
+(* b (+ (+ (c (+ 3 a)) (cos (+ 3 a))) (sin (+ 3 a))))
+
+这是一个狭窄的解决方案，处理了一个有用的案例。
+
+3.1.5 组合器的问题
+
+ 到目前为止，我们所构建的算术结构是使用组合器通过组合较简单的结构来构建复杂结构的一个例子。但是使用组合器构建这个系统有一些严重的缺点。首先，结构的一些属性是由组合手段决定的。例如，我们指出add-arithmetics优先考虑其参数，这样它们的顺序就会很重要。其次，这种设计中隐含的分层，例如码域算术必须在函数算术之前构建，这意味着在函数算术构建之后不可能再增加码域算术。最后，我们可能希望为返回函数的函数定义一个算术。如果不引入另一种自引用的机制，这在这个框架内是无法做到的，而自引用的安排是很麻烦的。
+组合器是强大而有用的，但由组合器构建的系统并不十分灵活。一个问题是，部件的形状必须提前制定好：将有的通用性取决于部件形状的详细计划，而且必须有一个部件如何组合的局部计划。这对于像算术这样被充分理解的领域来说不是问题，但对于开放性的构造来说就不合适了。在第3.2节中，我们将看到如何逐步增加新的算术种类，而不需要决定它们在层次结构中的位置，也不需要改变已经工作的现有部分。
+组合器的其他问题是，组合器系统的任何部分的行为都必须与它的上下文无关。设计师可以利用的一个强大的灵活性来源是建立确实依赖于其上下文的系统。通过改变一个系统的上下文，我们可以获得行为的变化。这是很危险的，因为可能很难预测一个变化会有什么表现。然而，仔细控制的变化是有用的。
+
+练习3.1: 布尔运算的热身
+ 在数字设计中，布尔运算和、或、和非分别用运算符*、+、和-来表示。
+有一个Scheme的谓词boolean? 只对#t和#f为真。用这个来做一个布尔运算包，可以和我们现有的算术结合起来。请注意，所有其他的算术运算符对布尔运算来说都是未定义的，所以将cos这样的东西应用于布尔运算的适当结果是报告错误。
+下面的模板可以帮助你开始。
+(define boolean-arithmetic (make-arithmetic 'boolean boolean? '() (lambda (name) (case name ((additive-identity) #f) ((multiplicative-identity) #t) (else (default-object)))) (lambda (operator) (let (( procedure (case operator ((+) <...>) ((-) <...>) ((*) <...>) ((negate) <...>) (else (lambda args (error "operator undefined in Boolean" operator))))))) (simple-operation operator boolean? procedure))))))
+
+ 在数字设计中，运算符-通常只作为单数运算符使用，并被实现为否定值。当安装了一个算术时，二进制运算符+、*、-和/被泛化为n-ary运算符。
+单项应用（-操作数）被安装程序转化为（否定操作数）。因此，为了使-发挥作用，你需要为运算符negate定义单项布尔运算。
+
+练习3.2：向量算术
+
+ 我们将制作并安装一个关于几何向量的算术包。这是一个很大的任务，它将使我们迄今为止所开发的系统的许多困难和不足之处浮出水面。
+a. 我们将把矢量表示为一个数字量的计划矢量。矢量的元素是相对于一些笛卡尔轴的坐标。这里有几个问题。加法（和减法）只针对相同维度的向量定义，所以你的算术必须知道维度。首先，在适用于向量坐标的基础运算上，做一个只定义向量的加法、否定和减法的算术。对向量应用任何其他操作都应该报告错误。提示：下面的程序会有帮助。
+
+(define (vector-element-wise element-procedure)
+(lambda vecs
+ ; Note: this takes multiple vectors
+(ensure-vector-lengths-match vecs)
+(apply vector-map element-procedure vecs)))
+(define (ensure-vector-lengths-match vecs)
+(let ((first-vec-length (vector-length (car vecs))))
+(if (any (lambda (v)
+(not (n:= (vector-length v)
+first-vec-length)))
+vecs)
+(error "Vector dimension mismatch:" vecs))))
+
+这里对apply的使用很微妙。一种思考方式是想象语言支持像这样的省略号：
+
+(define (vector-element-wise element-procedure)
+(lambda (v1 v2 ...)
+(vector-map element-procedure v1 v2 ...)))
+
+建立所需的算术，并证明它对数字向量以及数字和符号混合坐标的向量有效。
+b. 你的向量加法需要对坐标进行加法。坐标加法程序可以是将由install-arithmetic！在用户环境中提供的+运算符的值，或者可以是你的向量扩展的基础算术中的加法运算。这两种情况都能满足许多测试，而且使用已安装的加法运算实际上可能更通用。你使用的是哪一种？说明如何实现另一个选择。这个选择如何影响你将来对这个系统进行扩展的能力？解释一下你的推理。
+提示：控制过程中运算符解释的一个好方法是提供每个运算符要使用的过程作为参数给一个 "制造者过程"，该过程返回所需的过程。例如，为了控制在向量大小中使用的算术运算，可以这样写：
+
+(define (vector-magnitude-maker + * sqrt)
+(let ((dot-product (dot-product-maker + *)))
+(define (vector-magnitude v)
+(sqrt (dot-product v v)))
+vector-magnitude))
+
+c. 我们应该如何处理乘法？首先，对于两个向量来说，将乘法定义为它们的点积是合理的。
+但这里有一点问题。你需要同时使用加法和乘法运算，也许是来自坐标上的算术。这并不难解决。
+修改你的向量算术，将两个向量的乘法定义为它们的点积。证明你的点积是有效的。
+d. 在你的向量算术中加入向量的大小，扩展数字运算符 magnitude 以给出向量的长度。上面给出的代码是大部分的工作！
+e. 向量与标量的乘法或标量与向量的乘法应该产生标量积（每个坐标与标量相乘的向量）。因此，乘法可以是指点积或标量积，这取决于其参数的类型。修改你的向量算术，使其发挥作用。证明你的向量算术可以同时处理点积和标量积。提示：第78页上的 operation-union过程可以用一种非常优雅的方式来解决这个问题。
+
+练习3.3：扩展的排序 考虑将你的向量扩展（练习3.2）与现有的算术相结合的两种可能的排序：
+
+(define vec-before-func
+(extend-arithmetic
+function-extender
+(extend-arithmetic vector-extender combined-arithmetic)))
+(define func-before-vec
+(extend-arithmetic
+vector-extender
+(extend-arithmetic function-extender combined-arithmetic)))
+
+扩展的排序是如何影响所产生的算术的属性的？下面的程序在单位圆上做点：
+
+(define (unit-circle x)
+(vector (sin x) (cos x)))
+
+如果我们在安装vec-before-func和func-before-vec所产生的环境中执行以下每个表达式：
+
+((magnitude unit-circle) ’a)
+((magnitude (vector sin cos)) ’a)
+
+应该是：
+
+(sqrt (+ (* (sin a) (sin a)) (* (cos a) (cos a))))
+
+然而，这些表达式中的每一个都因扩展的两个排序之一而失败。有没有可能做一个两个都能正确评估的算式？请解释一下。
+
+3.2 可扩展的通用程序
+
+ 由组合器构建的系统，如第3.1节所述，会形成美丽的钻石状系统。这有时是正确的想法，我们会看到它再次出现，但要在钻石上添加东西是非常困难的。如果一个系统被构建成一团泥巴，就很容易添加更多的泥巴。11 
+ 
+ 泥巴的一个组织是建立在可扩展的通用程序的基础上的系统。现代动态类型的编程语言，如Lisp、Scheme和Python，通常有内置的算术，对各种类型的数字量都是通用的，如整数、浮点数、有理数和复数[115, 64, 105]。但是建立在这些语言上的系统通常不容易在事后进行扩展。
+我们在第3.1.5节指出的问题是使用组合器加法运算的结果。为了解决这些问题，我们将放弃那个组合器。然而，算术包的抽象仍然是有用的，正如扩展器的想法一样。我们将建立一个算术包，其中的操作使用通用程序，可以动态地增加新的行为。
+然后我们可以扩展泛型算术，并将扩展内容添加到泛型算术中。12 我们将从实现泛型程序开始，泛型程序是可以通过在定义了泛型程序之后添加处理程序来动态扩展的程序。一个泛型程序是一个与一组规则相结合的调度器，每个规则都描述了一个适合给定参数集的处理程序。这样的规则将处理程序与它的适用性结合起来。
+让我们通过定义一个名为plus的通用过程来研究它是如何工作的，它的工作方式类似于数字和符号量的加法：
+
+(define plus (simple-generic-procedure ’plus 2 #f))
+(define-generic-procedure-handler plus
+(all-args 2 number?)
+(lambda (a b) (+ a b)))
+(define-generic-procedure-handler plus
+(any-arg 2 symbolic? number?)
+(lambda (a b) (list ’+ a b)))
+(plus 1 2)
+3
+(plus 1 ’a)
+(+ 1 a)
+(plus ’a 2)
+(+ a 2)
+(plus ’a ’b)
+(+ a b)
+
+TODO
+
+过程simple-generic-procedure需要三个参数。第一个参数是一个任意的名字，用于在调试时识别该过程；第二个参数是该过程的arity。第三个参数用于提供一个默认的处理程序；如果没有提供（用#f表示），那么如果没有特定的处理程序，就会发出错误信号。
+在这里，plus被绑定到由simple-generic-procedure返回的新通用过程。它是一个Scheme过程，可以用指定的参数数来调用。
+过程define-generic-procedure-handler给现有的泛型程序添加了一个规则。它的第一个参数是要扩展的泛型程序；第二个参数是被添加的规则的适用性规范（如第73页）；第三个参数是满足该规范的参数的处理程序。
+(define-generic-procedure-handlergeneric-procedure applicability handler-procedure)经常需要指定一条规则，其中不同的参数是不同的类型。例如，为了制作一个矢量算术包，我们需要指定*运算符的解释。如果两个参数都是向量，适当的处理程序会计算点乘。如果一个参数是标量，另一个是矢量，那么适当的处理程序会用标量来缩放矢量元素。适用性参数是实现这一目的的方法。
+我们上面用来制作通用程序加的简单通用程序构造器是由程序 generic-procedure-constructor (define simple-generic-procedure (generic-procedure-constructormake-simple-dispatch-store)) 创建的，其中 mak-simple-dispatch-store 是一个封装了保存、检索和选择处理器的策略的程序。
+generic-procedure-constructor接收一个dispatch-store构造函数，并产生一个generic-procedure构造函数，该构造函数本身接收三个参数--一个在调试中有用的名称，一个arity，以及一个在没有适用的处理程序时使用的默认处理程序。
+如果默认处理程序参数是#f，那么默认处理程序就会发出错误信号：((generic-procedure-constructorname arity default-handler) dispatch-store-constructor) 以这种方式制造泛型程序的原因是，我们将需要在选择调度库方面有所不同的泛型程序家族。
+在第3.2.3节中，我们将看到实现这种机制的一种方法。但首先让我们看看如何使用它。
+
+3.2.1 通用算术 我们可以使用这个新的通用程序机制来建立算术包，其中的运算符映射到作为通用程序实现的操作。这将使我们能够制造出自我参照的结构。例如，我们可能想做一个包括向量算术的通用算术，其中向量和向量的分量都由相同的通用程序来操作。我们不能只用前面介绍的加法算术来建立这样的结构。
+(定义（make-generic-arithmetic dispatch-store-maker）（make-arithmetic 'generic any-object? '() constant-union (let ((make-generic-procedure (generic-procedure-constructor dispatch-store-maker)) (lambda (operator) (simple-operation operator any-object? (make-generic-procedure operator (operator-arity#f)))))) operator) make-generic-arithmetic程序创建一个新的算术。对于每个算术运算符，它构造了一个适用于任何参数的运算，并由一个通用程序实现。(谓词any-object?对任何事物都是真的。)我们可以用通常的方法来安装这个算术。
+但首先，让我们为泛型程序定义一些处理程序。
+现在我们有了泛型算术对象，这是很简单的事情。例如，我们可以从任何已经构建的算术中抓取操作和常量。
+(define (add-to-generic-arithmetic! generic-arithmetic arithmetic) (add-generic-arith-constants! generic-arithmetic arithmetic) (add-generic-arith-operations! generic-arithmetic arithmetic) 这需要一个通用算术包和一个具有相同运算符的普通算术包。它使用constant-union将常数合并到通用算术中。对于给定算术的每个运算符，它为相应的通用程序添加一个处理程序。
+为一个特定的运算符添加处理程序使用标准的通用程序机制，从运算符的操作中提取必要的适用性和程序。
+(define (add-generic-arith-operations! generic-arithmetic arithmetic) (for-each (lambda (operator) (let ((generic-procedure (simple-operation-procedure (arithmetic-operation operator generic-arithmetic))) (operation (arithmetic-operation operator arithmetic)) (define-generic-procedure-handler generic-procedure (operation-applicability operate) (operation-procedure operation))))) (arithmetic-operators arithmetic)) add-generic-arith-operations！程序为给定算术中的每个运算符找到必须被增强的通用程序。然后，它为该通用程序定义了一个处理程序，该处理程序是给定算术中该运算符的处理程序，使用该处理程序在给定算术中的适用性。
+将算术中的常数添加到泛型算术中的代码是类似的。对于通用算术中的每个常量名称，它在通用算术中找到名称与常量值的关联条目。然后用现有的常数和它从给定算式中得到的同名常数的常数联盟来替换常数值。
+(定义 (add-generic-arith-constants! generic-arithmetic arithmetic) (for-each (lambda (name) (let ((binding (arithmetic-constant-binding name generic-arithmetic)) (element (find-arithmetic-constant name arithmetic))) (set-cdr! binding (constant-union name (cdr binding) element)))) (arithmetic-constant-names generic-arithmetic))
+
+通用算术的乐趣 我们可以向通用算术添加许多算术，使其具有有趣的行为：（让（（g（make-generic-arithmetic make-simple-dispatch-store）））。(add-to-generic-arithmetic! g numeric-arithmetic) (add-to-generic-arithmetic! g (function-extender numeric-arithmetic)) (add-to-generic-arithmetic! g (symbolic-extender numeric-arithmetic) (Install-arithmetic! g)) 这就产生了一个通用算术，将数字算术与数字算术上的符号算术和数字算术上的函数算术结合起来。(+ 1 3 'a 'b) (+ (+ 4 a) b) 我们甚至可以运行一些更复杂的问题，如第79页：(pp (x 0 ((evolver F 'h stormer-2) numeric-s0 1)) (+ 9.999833334166664e-3 (* (/ (expt h 2) 12) -9.999750002487318e-7) 像以前一样，我们可以混合使用符号和函数：(* 'b ((+ cos sin) 3)) (* b -.8488724885405782)但是下面会提示一个错误，试图将符号量(cos a)和(sin a)作为数字添加：(* 'b ((+ cos sin) 'a)) 我们得到这个错误是因为 cos 和 sin 是数字运算符，像 + .
+由于我们在数字算术上有符号算术，这些运算符被扩展了，所以对于符号输入，这里是a，它们产生符号输出，即（cos a）和（sin a）。我们还在数字算术上增加了函数算术，所以如果函数在数字上组合（这里是通过+），它们的输出只有在输出是数字时才可以组合。但符号的结果不能用数字相加。这是我们构建算术g的方式的一个结果。
+但通用算术有其神奇之处。它可以是封闭的：所有对泛型算术的扩展都可以在泛型算术上进行! (让((g (make-generic-arithmetic make-simple-dispatch-store)) (add-to-generic-arithmetic! g numeric-arithmetic) (extend-generic-arithmetic! g symbolic-extender) (extend-generic-arithmetic! g function-extender) (install-arithmetic! g)) 这里我们使用一个新的程序extend-generic-arithmetic! 来捕捉一种常见的模式。
+(定义 (extend-generic-arithmetic! generic-arithmetic extender) (add-to-generic-arithmetic! generic-arithmetic (extender generic-arithmetic)) 现在我们可以使用复杂的混合表达式，因为这些函数是在通用算术上定义的： (* 'b ((+ 'c cos sin) (+ 3 'a)) (* b (+ (+ c (cos (+ 3 a))) (sin (+ 3 a))))) 我们甚至可以使用返回函数的函数：(((+ (lambda (x) (lambda (y) (cons x y))) (lambda (x) (lambda (y) (cons y x)))) 3) 4) (+ (3 . 4) (4 . 3)) 所以，也许我们已经实现了涅槃？
+
+3.2.2 构建取决于顺序! 不幸的是，规则被添加到通用程序中的顺序对其有严重的依赖性。这并不奇怪，因为泛型程序系统的构造是通过赋值的。我们可以通过改变构造的顺序看到这一点：（让（（g（make-generic-arithmetic make-simple-dispatch-store））) (add-to-generic-arithmetic! g numeric-arithmetic) (extend-generic-arithmetic! g function-extender) ;* (extend-generic-arithmetic! g symbolic-extender) ;* (install-arithmetic! g）），然后我们会发现在前面的算术中起作用的例子（* 'b ((+ 'c cos sin) (+ 3 'a))）失败了，因为符号算术捕获（+ 'c cos sin）产生一个符号表达式，这不是一个可以应用于（+ 3 a）的函数。
+问题是，+的符号运算的适用性接受至少有一个符号参数的参数和基数的域谓词的其他参数。但是符号算术是在作为基数的通用算术上创建的，而通用算术的域谓词接受任何东西！因此，符号算术的适用性是不确定的。还有一个适用于相同参数的 "+"的函数操作，但由于扩展的意外排序，它没有被选中。不幸的是，对规则的选择是模糊的。最好是不要有一个以上的适用操作。
+解决这个问题的一个方法是限制符号量来表示数字。我们可以通过建立我们的泛型算术来做到这一点，使符号算术在数字算术之上，就像我们在第92页所做的那样，而不是在整个泛型算术之上：（让（（g（make-generic-arithmetic make-simple-dispatch-store））) (add-to-generic-arithmetic! g numeric-arithmetic) (extend-generic-arithmetic! g function-extender) (add-to-generic-arithmetic! g (symbolic-extender numeric-arithmetic) (Install-arithmetic! g)) 这就成功了，与排序无关，因为在规则的选择上没有歧义。所以现在'c'将被解释为一个常数，被函数扩展器胁迫为一个常数函数。
+(* 'b ((+ 'c cos sin) (+ 3 'a)) (* b (+ (+ c (cos (+ 3 a))) (sin (+ 3 a))))) 不幸的是，除了数字之外，我们可能还想对其他数量进行符号化表达。我们还不能实现这个问题的一般解决方案。但是如果我们真的想要一个名为c的字面函数，我们可以像前面那样使用字面函数： (* 'b ((+ (字面函数 'c) cos sin) (+ 3 'a)) (* b (+ (c (+ 3 a)) (cos (+ 3 a))) (sin (+ 3 a))))) 这将与通用算术的构造顺序无关。
+有了这种机制，我们现在就可以用一个字面函数来评估斯托默积分器。(pp (x 0 ((evolver (literal-function 'F) 'h stormer-2) (make-initial-history 't 'h 'xt 'xt-h 'xt-2h) 1)) (+ (+ (* 2 xt) (* -1 xt-h)) (* (/ (expt h 2) 12) (+ (* 13 (f t xt) ) (* -2 (f (- t h) xt-h) ) (f (- t (* 2 h) ) xt-2h )))) 这是很难看的，如果我们看两个积分步骤的输出，情况会更糟。但看一下简化两步积分的结果是很有意思的。使用一个神奇的符号表达式简化器，我们得到一个相当可读的表达式。这对于调试数值过程是很有用的。
+(+ (* 2 (expt h 2) (f t xt)) (* -1/4 (expt h 2) (f (+ (* -1 h) t) xt-h)) (* 1/6 (expt h 2) (f (+ (* -2 h) t) xt- 2h)) (* 13/12 (expt h 2) (f (+ h t) (+ (* 13/12 (expt h 2) (f t xt)) (* -1/6 (expt h 2) (f (+ (* -1 h) t) xt-h)) (* 1/12 (expt h 2) (f (+ (*-2 h) t) xt-2h)) (* 2 xt) (* -1 xt-h )))) (* 3 xt) (*-2 xt-h)) 例如，注意到只有四个不同的顶层调用加速函数f，第四个顶层调用的第二个参数使用了三个已经计算过的f的调用。
+如果我们消除共同的子表达式，我们会得到。(let* ((G84 (expt h 2)) (G85 (f t xt)) (G87 (* -1 h)) (G88 (+ G87 t)) (G89 (f G88 xt-h)) (G91 (*-2 h)) (G92 (+ G91 t)) (G93 (f G92 xt- 2h))(+ (* 2 G84 G85) (* -1/4 G84 G89) (* 1/6 G84 G93) (* 13/12 G84 (f (+ h t) (+ (* 13/12 G84 G85) (* -1/6 G84 G89) (* 1/12 G84 G93) (* 2 xt) (* -1 xt-h )))) (* 3 xt) (* -2 xt-h))) 这里我们清楚地看到，对f只有四个不同的调用。
+尽管基本积分器中的每个积分步骤对f进行了三次调用，但这两个步骤在两个中间调用上是重叠的。虽然这对这样一个简单的例子来说是显而易见的，但我们看到了符号化的评估是如何帮助理解数值计算的。
+
+3.2.3 实现泛型程序 我们已经用泛型程序做了一些惊人的事情。但是，我们如何使这样的东西发挥作用呢？为泛型过程制作构造器 在第89页，我们制作了一个简单的泛型过程构造器： （define simple-generic-procedure (generic-procedure-constructormake-simple-dispatch-store) 过程 generic-procedure-constructor 被赋予一个 "dispatch strategy "过程；它返回一个泛型过程构造器，该构造器接受一个名称、一个arity和一个默认处理程序规范。当用这三个参数调用这个过程时，它返回一个泛型过程，并为该过程关联一个新构造的元数据存储，该元数据存储包含名称、arity、调度策略的实例和缺省处理程序（如果有）。Dispatch-strategy实例将维护处理程序、它们的适用性，以及决定对通用过程的给定参数选择哪种处理程序的机制。
+实现generic-procedure-constructor的代码是：（定义（generic-procedure-constructor dispatch-store-maker）（lambda（name arity default-handler）（让（（metadata（make-generic-metadata name arity（dispatch-store-maker））（或default-handler（error-generic-procedure-handler name)))))（定义（the-generic-procedure . args）（ generic-procedure-dispatch metadata args) (set-generic-procedure-metadata! the-generic-procedure metadata) the-generic-procedure)) 这个实现使用the-generic-procedure，一个普通的Scheme程序，来表示通用程序，以及一个决定程序行为的元数据存储（用于规则等）。这个存储空间使用 "便条 "与泛型过程相关联（如第28页），以后可以通过调用generic-procedure-metadata获得。这允许诸如define-generic-procedure-handler这样的程序来修改给定的泛型过程的元数据。
+generic-procedure-constructor的参数是一个程序，它创建了一个用于保存和检索处理程序的调度存储。派遣库封装了选择处理程序的策略。
+下面是我们到目前为止所使用的简单的调度库构造函数。派遣存储被实现为一个接受消息的过程：（定义（make-simple-dispatch-store）（让（（规则'（）) (default-handler #f)) (define (get-handler args) ;; body将在下面的文本中显示。
+...) (define (add-handler! applicability handler) ;; body将显示在下面的文本中。
+...) (define (get-default-handler) default-handler) (define (set-default-handler! handler) (set! default-handler handler)) (lambda (message) ; the simple dispatch store (case message ( (get-handler) get-handler) ( (add-handler! ) add-handler!) (((get-default-handler) get-default-handler) ((set-default-handler!) set-default-handler!) ((get-rules) (lambda () rules) ) (else (error "未知消息:" message)))))) 简单的调度存储只是维护了一个规则的列表，每个规则都将一个适用性与一个处理程序配对。当get- handler内部程序被调用并带有通用程序的参数时，它按顺序扫描该列表，寻找一个其适用性被所提供的参数所满足的处理程序；它返回处理程序，如果没有找到，则返回#f： (define (get-handler args) (let ((rule (find (lambda (rule) (predicates-match? (car rule) args)) rules)) (and rule (cdr rule)))) 有许多可能的策略来选择要运行的处理程序。
+上面的代码返回列表中第一个适用的处理程序。
+另一种策略是返回所有适用的处理程序。如果有一个以上的处理程序适用，也许应该尝试所有的处理程序（并行的），并比较其结果 将调度存储构造函数作为参数传递给泛型程序-构造函数，可以在创建泛型程序构造函数时选择策略，而不是硬编码到实现中。
+
+向通用程序添加处理程序 处理程序定义过程（见下文）通过调用dispatch store的内部程序add-handler来添加新规则。
+对于上面的make-simple-dispatch-store，add-handler将新规则添加到规则列表的前面。(但是如果已经有一个处理该适用性的规则，它只是替换了处理程序)。(define (add-handler! applicability handler) (for-each (lambda (predicates) (let ((p (assoc predicates rules))) (if p (set-cdr! p handler) (set! rules (cons (cons predicates handler) rules))))) applicability)) define-generic-procedure-handler过程使用元数据表来获取通用程序的元数据记录。
+它向调度库询问add-handler！过程，并使用该过程向元数据添加一条规则，将适用性与处理程序联系起来。通过generic- metadata-dispatch-store从泛型程序的元数据中获取dispatch-store实例。
+(define (define-generic-procedure-handler generic-procedure applicability handler) (((generic-metadata-dispatch-store (generic-procedure-metadata generic-procedure)) 'add-handler!) applicability handler) ) 最后，该机制的核心是调度，由一个泛型程序（第97页的the-generic-procedure）调用，它找到一个合适的处理程序并应用它。如果没有合适的处理程序，则调用在构造泛型过程时提供的默认处理程序。13 (define (generic-procedure-dispatch metadata args) (let (( handler (get-generic-procedure-handler metadata args)) (apply handler args)) (define (get-generic-procedure-handler metadata args) (or ((generic-metadata-getter metadata) args) ((generic-metadata-default-getter metadata))))) 可扩展泛型的力量 在可扩展泛型程序的基底上构建一个系统是一个强大的想法。在我们的例子中，对于语言设计者未曾想象过的新数据类型，有可能定义加法、乘法等的含义。例如，如果一个系统的算术运算符被实现为可扩展的泛型，那么用户可以扩展它们，以支持对四元数、向量、矩阵、素数以外的整数、函数、张量、微分形式的运算。
+我们已经看到，这种可扩展通用程序的使用存在着潜在的问题。另一方面，一些 "突变 "将是非常有价值的。例如，有可能将算术扩展到符号量。最简单的方法是对所有的运算符进行通用扩展，将符号量作为参数，并返回一个数据结构，代表对参数的指定运算。加上代数表达式的简化器，我们突然有了一个符号操作器。这在调试纯数值计算时很有用，因为如果我们给它们提供符号参数，我们可以检查产生的符号表达式，以确保程序正在计算我们想要的东西。它也是优化数字程序的部分评估器的基础。而函数式微分可以看作是算术对复合数据类型的通用扩展（见3.3节）。我们用来教授经典力学的scmutils系统[121]正是以这种方式实现微分的。
+
+练习3.4: 函数值 通用的算术结构使我们能够关闭系统，使返回函数的函数能够工作，如例子中的((* 3 (lambda (x) (lambda (y) (+ x y))(lambda (x) (lambda (y) (vector y x)))) 'a) 4) (* (* 3 (+ a 4)) #(4 a)) a. 在第3.1节介绍的纯粹基于组合器的算术中，要安排这样的工作有多难？b. 第86页的练习3.3问的是向量和函数扩展的排序的含义。通用系统是否能够支持那里讨论的两种表达方式（并复制到下面）？解释一下。
+((幅度单位圆)'a)((幅度(向量sin cos))'a) c. 有什么好办法可以使下面的内容生效吗？((向量cos sin) 3) #(-.9899924966004454 .1411200080598672) 显示使之工作的代码或解释其困难。
+
+练习 3.5: 一个奇怪的错误 考虑 arith.scm 中的 +-like ("plus-like") 过程，如下图所示，它实现了 n-ary 过程 + 和 * 作为安装一个算术的一部分。它返回一对名称和过程；安装程序将把名称与过程绑定。
+看起来它被写成执行get-identity过程，该过程在每次调用操作时都会计算身份，没有参数。
+(define (+-like operator identity-name) (lambda (arithmetic) (let ((binary-operation (find-arithmetic-operation operator arithmetic))) (and binary-operation (let ((binary (operation-procedure binary-) 操作） (get-identity (identity-name->getter identity-name arithmetic))) (cons operator (lambda args (case (length args) ((0) (get-identity)) ((1) (car args) ) (else (pairwise binary args)))))))))) 也许一个操作者的身份应该只计算一次，而不是每次处理程序被调用时都计算。因此，建议将代码修改如下。(define (+-like operator identity-name) (lambda (arithmetic) (let ((binary-operation (find-arithmetic-operation operator arithmetic))) (and binary-operation (let ((binary (operation-procedure binary-operation)) (identity ((ident-name->getter identity-name arithmetic)))) (cons operator (lambda args (case (long args) ((0) identity) ((1) (car args) ) (else (pairwise binary args )))))))))) 然而，这有一个微妙的错误! 你能引出这个错误吗？你能解释它吗？练习3.6: 矩阵 矩阵在科学和技术计算中无处不在。
+a. a. 制作并安装一个用于数字矩阵的算术包，其中有+、-、否定、和*的操作。这个算术包需要能够知道矩阵中的行数和列数，因为只有当第一个矩阵中的列数等于第二个矩阵中的行数时，才能定义矩阵乘法。
+确保你的乘法器可以将矩阵与标量或向量相乘。为了使矩阵与向量发挥得更好，你可能需要区分行向量和列向量。这对向量包的设计有什么影响？(见第85页练习3.2。)你可以假设向量和矩阵的维数都很小，所以你不需要处理稀疏表示。
+矩阵的合理表示是一个Scheme向量，其中每个元素都是一个Scheme向量，代表一个行。
+b. 向量和矩阵可能包含符号化的数字量。使之发挥作用。
+c. 矩阵反转适合于你的算术。如果一个符号矩阵是密集的，反转可能需要的空间是阶乘的维度。为什么？注意：我们并不要求你实现矩阵的反演。
+练习3.7: 字面向量和矩阵 也可以用向量和矩阵的符号表达式的代数来进行字面矩阵和字面向量的算术。你能使这些复合结构的符号代数与以符号数字表达式为元素的向量和矩阵发挥得很好吗？请注意。这是很难的。
+也许它适合作为一个长期项目的一部分。
+
+3.3 例子。自动微分 可扩展通用程序的一个显著应用是自动微分。14 这是一个漂亮的方法，可以得到一个计算给定程序所计算的函数的导数的程序。15 自动微分现在是机器学习应用中的一个重要组成部分。
+我们将看到，实现自动微分的一个简单方法是扩展通用算术基元以与微分对象（一种新的复合数据类型）一起工作。这将实现符号和数字函数的自动微分。它还将使我们能够使自动微分与高阶程序--将其他程序返回为值的程序--一起工作。
+下面是一个简单的自动微分的例子来说明我们正在谈论的内容：（（导数（lambda (x) (expt x 3)））2）12 注意计算其参数立方的函数的导数是一个新的函数，当给定2作为其参数时返回12作为其值。
+如果我们将算术扩展到处理符号表达式，并对结果做一些代数简化，我们会得到。((derivative (lambda (x) (expt x 3))) 'a) (* 3 (expt a 2)) 而编程语言的全部功能都可以使用，包括高阶程序。这种系统在处理有趣的物理问题中出现的非常大的表达式时非常有用。16 让我们看看一个简单的应用：用牛顿方法计算一个方程的根。如果f足够平滑，并且我们有一个足够接近的猜测x0，我们可以通过公式计算一个新的猜测x1来改进这个猜测。必要时可以重复这样做，以得到一个足够准确的结果。一个完成这个任务的基本程序是： (定义 (root-newton f initial-guess tolerance) (让 ((Df (derivative f))) (定义 (improve-guess xn) (- xn (/ (f xn) (Df xn)))) (让循环 ((xn initial-guess)) (让 ((xn+1 (improve-guess xn)) (if (close-enuf? xn xn+1 tolerance) xn+1 (循环 xn+1 )))))) 注意，root-newton中名为Df的本地过程是一个计算由作为f传入的过程计算的函数的导数的过程。
+例如，假设我们想知道第一象限中cos(θ)=sin(θ)的角度θ。(答案是π/4≈.7853981633974484）我们可以这样写：（定义（cs theta）（-（cos theta）（sin theta））) (root-newton cs 0.5 1e-8) .7853981633974484 这个结果是正确的，达到全机精度。
+
+3.3.1 自动微分的工作原理 自动微分的程序是直接从导数的定义中导出的。假设给定一个函数f和其域中的一个点x，我们想知道该函数在附近的一个点f（x+Δx）的值，其中Δx是一个小的增量。函数f的导数被定义为函数Df，其对特定参数x的值可以 "乘以 "参数的增量Δx，以获得对f值增量的最佳线性近似：我们使用一个数据类型来实现这个定义，我们称之为微分对象。微分对象[x, δx]可以被认为是一个具有小增量的数字，x + δx。但我们把它当作一个类似复数的新数字量：它有两个组成部分，一个是有限部分，一个是无限小部分。17 我们把每个原始算术函数扩展到与微分对象一起工作：每个原始算术函数f必须知道它的导数函数Df，这样。(3.5)注意，f在点x处的导数Df(x)，是δx在所产生的微分对象的无穷小部分的系数。
+现在，这里有一个强大的想法：如果我们再把f（[x，δx]）（方程3.5）的结果通过另一个函数g，我们会得到我们希望的连锁规则答案。因此，如果我们能计算出所有原始函数在微分对象上的结果，我们就能计算出所有函数在微分对象上的组合的结果。给出这样的结果，我们可以提取组合的导数：导数是所产生的微分对象中的无限小增量的系数。
+要扩展一个通用算术运算符来计算微分对象，我们只需要提供一个程序来计算该运算符所命名的原始算术函数的导数。然后我们可以使用普通的Scheme组合来得到任何原始函数组合的导数。18 给出一个实现单项函数f的过程，过程导数产生一个新的过程the-derivative，计算f所计算的函数的导数。19 当应用于某个参数x时，导数创建一个新的无限小增量dx，并将其加入参数，得到代表x + δx的新微分对象[x, δx]。然后将程序f应用于这个微分对象，通过从值中提取无穷小增量dx的系数来获得f的导数：（定义（导数f）（定义（the-derivative x）（让*（（dx（make-new-dx））（值（f（d:+ x（make-infinitesimal dx))))) (extract-dx-part value dx))) the-derivative) 过程make-infinitesimal制作了一个微分对象，其有限部分为0，无限部分为dx。过程d:+增加了微分对象。细节将在第3.3.3节解释。
+
+扩展基元 我们需要制作处理程序，扩展基元算术通用程序，以便对微分对象进行操作。对于每个单项程序，我们必须做出结果的有限部分和结果的无限部分，并且我们必须把这些结果放在一起，如公式3.5所表示的。因此，计算函数f的一元初等算术过程的处理程序是由diff:unary-proc构建的，该处理程序f表示f，df表示其导数Df。这些程序是用特殊的加法和乘法程序d:+和d:*将微分对象粘在一起的，将在第3.3.3节中解释。
+(define (diff:unary-proc f df) (define (uop x) ; x是一个微分对象 (let ((xf (有限部分x)) (dx (无限小部分x))) (d:+ (f xf) (d:* (df xf) dx)))) uop) 例如，微分对象的sqrt程序处理器只是： （define diff:sqrt （diff:unary-proc sqrt （lambda （x） （/ 1 （* 2 （sqrt x)))))) diff:unary-proc的第一个参数是sqrt过程，第二个参数是一个计算sqrt导数的过程。
+我们使用(assign-handler! sqrt diff:sqrt differential?)将新的处理程序添加到通用的sqrt过程中，其中differential?是一个谓词，只对差分对象为真。过程assign-handler！只是一个有用模式的缩写：(define (assign-handler! procedure handler . preds) (define-generic-procedure-handler procedure (apply match-args preds) handler) 而程序 match-args 从一连串的谓词中做出了一个适用性规范。
+其他单数基元的处理程序是直截了当的：20
+
+(define diff:exp (diff:unary-proc exp exp)) (define diff:log (diff:unary-proc log (lambda (x) (/ 1 x)))) (define diff:sin (diff:unary-proc sin cos)) (define diff:cos (diff:unary-proc cos (lambda (x) (* -1 (sin x))))) ⋮ 二元运算的情况就比较复杂。
+(3.6) 其中∂0f和∂1f是f相对于两个参数的偏导函数。让f是一个两个参数的函数；那么∂0f是一个新的两个参数的函数，计算f相对于其第一个参数的偏导。所以二元运算的规则是 为了实现二元运算，我们可能认为可以简单地按照单元运算的计划，其中d0f和d1f是两个偏导函数：（定义（diff:binary-proc f d0f d1f）（定义（bop x y）（让（（dx（无穷小部分x））（dy（无穷小部分y））（xf（有限部分x））（yf（有限部分y）））（d。 + (f xf yf) (d:+ (d:* dx (d0f xf yf)) (d:* (d1f xf yf) dy))))) bop) 这是一个好的计划，但它并不完全正确：它没有确保两个参数的有限和无限部分被一致选择。我们需要对如何选择部分更加谨慎。我们将在第3.3.3节中解释这个技术细节并加以解决，但现在我们还是用这个近似正确的代码吧。
+加法和乘法是直接的，因为偏导数很简单，但是除法和指数化就比较有趣了。我们只展示了diff:+的处理程序的分配，因为其他的都是类似的。
+(定义 diff:+ (diff:binary-proc + (lambda (x y) 1) (lambda (x y) 1)) (assign-handler! + diff:+ differential? any-object?) (assign-handler! + diff:+ any-object? differential?) (define diff:* (diff:binary-proc * (lambda (x y) y) (lambda (x y) x)) ) (define diff:/ (diff:binary-proc / (lambda (x y) (/ 1 y)) (lambda (x y) (* -1 (/ x ( square y))))))) 指数运算f (x, y) = x的处理程序要复杂一些。关于第一个参数的部分很简单：∂0 f (x, y) = yx-1。但是关于第二个参数的部分通常是∂1f (x, y) = x log x，除了一些特殊情况：（定义diff:expt (diff:binary-proc expt (lambda (x y) (* y (expt x (- y 1)))) （lambda (x y) (if (and (number? x）（零？ x））（如果（数？ y）（如果（正？ y）0（错误 "衍生品未定义：EXPT" x y））0）（*（log x）（expt x y))))))
+
+提取导数的值 为了计算一个函数的导数值，我们将该函数应用于一个微分对象并得到一个结果。我们必须从这个结果中提取导数的值。有几种可能性必须加以处理。如果结果是一个微分对象，我们必须从该对象中提取导数的值。如果结果不是一个微分对象，导数的值就是零。还有一些我们没有提到的情况。这就需要一个带有默认值的通用程序，产生一个零。
+(define (extract-dx-default value dx) 0) (define extract-dx-part (simple-generic-procedure 'extract-dx-part 2 extract-dx-default)) 在返回微分对象的情况下，dx的系数是所需的导数。这将会变得有点复杂，但基本思想可以表达如下。(define (extract-dx-differential value dx) (extract-dx-coefficient-from (infinitesimal-part value) dx)) (define-generic-procedure-handler extract-dx-part (match-args differential? diff-factor?) extract-dx-differential) 之所以不大正确，是因为由于技术原因，微分对象的结构比我们已经展示的更复杂。这将在第3.3.3节中充分解释。
+注意：我们使提取器成为通用的，以便将来能够扩展到返回函数或复合对象的函数，如向量、矩阵和张量。(见第124页的练习3.12。)除了可能有更多的原始运算符和数据结构需要包括在内，这就是实现自动微分的所有真正需要的东西! 处理程序中提到的所有程序都是关于算术的常见通用程序；它们可能包括符号算术和函数算术。
+
+3.3.2 n次函数的导数 对于一个有多个参数的函数，我们需要能够计算关于每个参数的偏导数。一种方法是：21 (define ((partial i) f) (define (the-derivative . args) (if (not (< i (length args)) ) (error "Not enough arguments for PARTIAL" i f args)) (let* ((dx (make-new-dx)) (value (apply f (map (lambda (arg j) (if (= i j) (d:+ arg (make-infinitesimal dx)) arg)) args (iota (length args)))))) (extract-dx-part value dx))) the-derivative) 这里我们提取的是将f应用于提供的参数的结果中的无限小数dx的系数，第i个参数增加了dx。22 现在考虑一个两个参数的函数g。在方程3.6的基础上展开，我们发现导数Dg与参数的增量矢量相乘。g在x, y点的导数Dg是方括号中的一对偏导数。该偏导数向量与增量向量的内积就是函数g的增量。一般衍生程序计算这个结果：（定义（一般衍生g）（定义（（衍生.args）.增量）（让（（n（长度args）））（断言（=n（长度增量）））（如果（=n 1）（*（（衍生g）（car args） (car increments)) (reduce (lambda (x y) (+ y x)) 0 (map (lambda (i inc) (* (apply ((partial i) g) args) inc)) (iota n) increments))))) the-derivative) 不幸的是 general-derivative 没有返回偏导数的结构。在许多情况下，有一个导数程序梯度是很有用的，它实际上给出了部分导数的笼子。(见练习3.10)。
+
+练习3.8: 部分导数 另一种思考部分导数的方法是用λ-微积分的方式。画一张数据必须流动的图。使用currying来固定保持不变的参数，产生一个单参数程序，普通导数将被应用于此。写出这个版本的部分导数程序。
+练习3.9：添加处理程序 有一些原始算术函数，我们没有为微分对象添加处理程序，例如tan 。
+a. 为tan和atan1添加处理程序（atan1是一个有一个参数的函数）。
+b. 如果atan能像Scheme Report [109]中那样有选择地接受两个参数就更好了，因为我们通常想保留我们正在工作的象限。修正通用程序atan，使其正确地做到这一点--对一个参数使用atan1，如果给出两个参数则使用atan2。同时，为差分安装一个atan2处理程序。记住，它必须与atan1处理程序共存。
+练习 3.10: 向量和凹槽 如上所述，导数的概念可以被推广到有多个参数的函数。一个多参数函数的梯度是关于每个参数的偏导的向量。
+a. 开发向量和向量的数据类型，使Dg(x, y)的值是偏导的向量。编写一个提供该值的梯度程序。记住，向量和向量的乘积应该是它们的内积--它们元素的分量乘积之和。
+b. 请注意，如果一个函数的输入是一个向量，这类似于多个输入，所以梯度的输出应该是一个凹槽。还请注意，如果一个函数的输入是一个凹槽，那么梯度的输出应该是一个向量。使之发挥作用。
+3.3.3 一些技术细节 尽管自动微分背后的想法并不复杂，但要使其正确工作，必须解决一些微妙的技术细节。
+
+微分代数 如果我们想计算二阶导数，我们必须取一个导数函数的导数。对这样一个函数的评估将有两个无限小数在起作用。为了能够计算多个导数和多个变量函数的导数，我们在 "无穷小空间 "定义了一个微分对象的代数。这些对象是多变量幂级数，其中没有一个无限小的增量的指数大于1。23 一个微分对象由一个幂级数项的标记列表表示。每个项都有一个系数和一个无限小的增量因子的列表。这些项都是按降序排列的。
+(顺序是增量的数量。 所以δxδy比δx或δy的顺序高。) 下面是一个快速和肮脏的实现： 24 (define differential-tag 'differential) (define (differential? x) (and (pair? x) (eq? (car x) differential-tag)) (define (diff-terms h) (if (differential? h) (cdr h) (list (make-diff-term h '()))))) 术语列表只是differential对象的cdr。然而，如果我们得到的对象不是明确的差分对象，例如一个数字，我们就把它胁迫成一个只有一个术语的差分对象，而且没有增量因素。当我们从一个（预排序的）术语列表中制造一个微分对象时，我们总是试图返回一个简化的版本，它可能只是一个数字，这不是显式的微分对象：（定义（make-differential terms）（让（（term ; Nonzero terms）（过滤（lambda（term）（让（（coeff（diff-coefficient term）））（不是（和（number? coeff）（= coeff 0))))) terms））（cond（（null? terms） 0）（和（null? (cdr terms)) ;; 仅限有限部分：(null? (diff-factors (car terms)))) (diff-coefficient (car terms))) ((every diff-term? terms) (cons differential-tag terms)) (else (error "Bad terms" ))))) 在这个实现中，术语也被表示为标签列表，每个都包含一个系数和一个有序的因子列表。
+(define diff-term-tag 'diff-term) (define (make-diff-term coefficient factors) (list diff-term-tag coefficient factors)) (define (diff-term? x) (and (pair? x) (eq? (car x) diff-term-tag))(定义(diff-coefficient x) (cadr x)) (定义(diff-factors x) (caddr x)) 为了计算导数，我们需要能够添加和乘以微分对象： (define (d:+ x y) (make-differential (+diff-termlists (diff-terms x) (diff-terms y)))) (define (d:* x y) (make-differential (*diff-termlists (diff-terms x) (diff-terms y))))，我们还需要这个： (defin (make-finitesimal dx) (make-differential (list (make-diff-term 1 (list dx))))) 术语列表的添加是我们执行和使用术语排序的地方，高阶术语在列表中排在前面。只有当两个术语的系数相同时，我们才能将它们相加。如果系数之和为零，我们就不包括产生的项。
+(定义 (+diff-termlists l1 l2) (cond ((null? l1) l2) ((null? l2) l1) (else (let ((t1 (car l1)) (t2 (car l2)) (cond ((equal? (diff-factors t1) (diff-factors t2)) (let ((newcoeff (+ (diff-coefficient t1) (diff-coefficient t2)))) (if (and (number? newcoeff）（= newcoeff 0））（+diff-termlists（cdr l1）（cdr l2））（cons（make-diff-term newcoeff（diff-factors t1））（+diff-termlists（cdr l1）（cdr l2)))))) （（diff-term>? t1 t2）（cons t1（+diff-termlists（cdr l1）l2）））（else （cons t2（+diff-termlists l1 （cdr l2))))))))) 如果我们可以对单个术语进行乘法，那么术语列表的乘法就很简单了。两个术语表l1和l2的乘积是将l1中的每个术语乘以l2中的每个术语所得到的术语表相加。
+(define (*diff-termlists l1 l2) (reduce (lambda (x y) (+diff-termlists y x)) '() (map (lambda (t1) (append-map (lambda (t2) (*diff-terms t1 t2)) l2) ) l1)) 一个项有一个系数和一个因子列表（无限小数）。
+在一个微分对象中，没有一个项的指数可能大于1，因为δx2=0。因此，当我们将两个项相乘时，我们必须检查我们要合并的因子列表中没有共同的因子。这就是*diff-terms返回一个乘积项的列表或一个空列表的原因，要附加到*diff-termlists中。当我们合并两个因子列表时，我们保持因子的排序；这使得对术语的排序更加容易。
+(define (*diff-terms x y) (let ((fx (diff-factors x)) (fy (diff-factors y))) （如果（null? (ordered-intersect diff-factor>? fx fy)) (list (make-diff-term (* (diff-coefficient x) (diff-coefficient y)) (ordered-union diff-factor>? fx fy))' ())))
+
+有限部分和无限小部分 一个微分对象有一个有限部分和一个无限小部分。我们在第109页的diff:binary-proc程序对于有一个以上的无穷小的微分对象是不正确的。为了确保参数x和y的部分被一致地选择，我们实际上使用：（定义（diff:binary-proc f d0f d1f）（定义（bop x y）（让（（因子（最大因子x y）））（让（（dx（无限小部分x因子））（dy（无限小部分y因子））（xe（有限部分x因子））（ye（有限部分y因子）））（d: + (f xe ye) (d:+ (d:* dx (d0f xe ye)) (d:* (d1f xe ye) dy)))))) bop) 其中因子由最大因子选择，以便x和y都包含在具有最大因子数的项中。
+微分对象的有限部分是所有的项，除了在最高阶的项中含有最大因子的项，而无限部分是其余的项，所有的项都含有该因子。
+考虑一下下面的计算。最高阶项是∂0∂1f（x，y）-δxδy。关键的一点是，我们可以以任何方式将微分对象分解成若干部分，以符合任何一个最大因子（这里是δx或δy）为主。选择哪一个并不重要，因为R→R的混合参量可以换算。25 (define (finite-part x #! optional factor) (if (differential? x) (let ((factor (default-maximal-factor x factor)) ) (make-differential (remove (lambda (term) (memv factor (diff-factors term) )) (diff-terms x)))) x)) (define (infinitesimal-part x #! optional factor) (if (differential? x) (let ((factor (default-maximal-factor x factor)) ) (make-differential (filter (lambda (term) (memv factor (diff-factors term)) ) (diff-terms x)))) 0)) (define (default-maximal-factor x factor) (if (default-object? factor) (maximal-factor x) factor)
+
+提取的真正工作原理 正如第114页所解释的，为了使取多个导数或处理有多个参数的函数成为可能，一个微分对象被表示为一个多变量的幂级数，其中没有一个无穷小的增量的指数大于1的。
+这个数列中的每一个项都有一个系数和一个无穷小的增量因子的列表。这使得提取任何一个增量因子的导数变得复杂。这里是真正的故事。在返回微分对象的情况下，我们必须找到结果中包含我们正在评估的导数的无穷小系数dx的那些项。我们收集这些项，从每个项中去除dx。如果在去掉有dx的项后没有剩下任何项，导数的值就是零。如果正好剩下一个没有微分因子的项，那么这个项的系数就是导数的值。但是如果还有剩余的带微分因子的项，我们必须将带这些剩余项的微分对象作为导数的值返回。
+
+(define (extract-dx-differential value dx)
+(let ((dx-diff-terms
+(filter-map
+(lambda (term)
+(let ((factors (diff-factors term)))
+(and (memv dx factors)
+(make-diff-term (diff-coefficient term)
+(delv dx factors)))))
+(diff-terms value))))
+(cond ((null? dx-diff-terms) 0)
+((and (null? (cdr dx-diff-terms))
+(null? (diff-factors (car dx-diff-terms))))
+(diff-coefficient (car dx-diff-terms)))
+(else (make-differential dx-diff-terms)))))
+(define-generic-procedure-handler extract-dx-part
+(match-args differential? diff-factor?)
+extract-dx-differential)
+
+高阶函数 对于许多应用，我们希望我们的自动微分器能够对返回函数值的函数正确工作：((derivative (lambda (x) (lambda (y z) (* x y z)))) 2) 3 4) ;值：12 包括字面函数和部分导数使这更有趣。
+((derivative (lambda (x)) (((partial 1) (literal-function 'f)) x 'v))) 'u) (((partial 0) ((partial 1) f) ) u v) 事情可以变得更加复杂。(((derivative (lambda (x) (derivative (lambda (y) ((literal-function 'f) x y))))) 'u) 'v) (((partial 0) ((partial 1) f)) u v) 使这个工作在程序extract-dx-part中引入了严重的复杂性。
+如果将一个函数应用于一个微分对象的结果是一个函数--例如，一个导数的导数--我们需要推迟提取，直到该函数被调用并带有参数。在返回一个函数的情况下，如(((Divative (lambda (x) (Divative (lambda (y) (* x y))))) 'u) 'v) 1我们不能提取导数，直到该函数被应用于参数。所以我们推迟提取，直到我们得到应用后的值。我们扩展了我们的通用提取器： (define (extract-dx-function fn dx) (lambda args (extract-dx-part (apply fn args) dx))(define-generic-procedure-handler extract-dx-part (match-args function? diff-factor?) extract-dx-function) 不幸的是，这个版本的 extract-dx-function 有一个微小的 bug。26 我们的补丁是用重新映射因子 dx 的代码来包装新延迟过程的主体，以避免不愉快的冲突。因此，我们将函数的处理程序改为：（定义（extract-dx-function fn dx）（lambda args（让（（eps（make-new-dx）））（replace-dx dx eps（extract-dx-part（apply fn（map（lambda（arg）（replace-dx eps dx arg））args））dx))))) 这创建了一个全新的因子eps，并用它来代替参数中的dx，从而防止与任何其他dx的实例发生冲突。
+因子的替换本身就有点复杂，因为代码必须在数据结构中摸索。我们将使替换成为一个通用程序，因此我们可以将其扩展到新的数据类型。默认情况下，替换只是对象上的身份：（定义（replace-dx-default new-dx old-dx object）对象）（定义replace-dx （simple-generic-procedure 'replace-dx 3 replace-dx-default））。对于一个差分对象，我们必须实际去把新的因子替换成旧的，而且我们必须保持因子列表的排序。(定义 (replace-dx-differential new-dx old-dx object) (make-differential (排序 (map (lambda (term) (make-diff-term (diff-coefficient term) (排序 (substitute new-dx old-dx (diff-factors term) ) diff-factor>?)) (diff-terms object)) diff-term>?)) (define-generic-procedure-handler replace-dx (match-args diff-factor? diff-factor? differential? ) replace-dx-differential) 最后，如果对象本身是一个函数，我们必须推迟它，直到有参数可用来计算一个值。(define (replace-dx-function new-dx old-dx fn) (lambda args (let ((eps (make-new-dx))) (replace-dx old-dx eps (replace-dx new-dx old-dx (apply fn (map (lambda (arg) (replace-dx eps old-dx arg) ) args))))))) (define-generic-procedure-handler replace-dx (match-args diff-factor? function?) replace-dx-function) 这比我们想象的要复杂得多。它实际上对差分因子进行了三次替换。这是为了防止与fn主体中可能是自由的因子发生碰撞，这些因子是从函数fn定义的词法环境中继承的。
+
+练习3.11：错误! 在我们意识到第121页脚注26中指出的错误之前，程序extract-dx-function是这样写的：（定义（extract-dx-function fn dx）（lambda args (extract-dx-part (apply fn args) dx)) 通过构造一个函数来证明使用 replace-dx 包装器的原因，这个函数的导数在早期版本的 extract-dx-part 中是错误的，但在固定版本中是正确的。这并不容易! 你可能需要阅读脚注26中指出的参考文献。
+3.3.4 微分参数的字面函数 对于简单的参数，应用字面函数只是构建函数表达式对参数的应用的问题。但是，字面函数也必须能够接受差分对象作为参数。当这种情况发生时，字面函数必须为作为微分的参数构造（部分）导数表达式。对于一个n个参数的函数的第i个参数，适当的导数表达式是：（定义(deriv-expr i n fexp) (if (= n 1) '(derivative ,fexp) '((partial ,i) ,fexp)) 一些参数可能是微分对象，所以一个字面函数必须为每个参数选择一个有限部分和一个无限小部分。就像二进制算术处理程序一样，必须一致地选择最大的因子。我们的字面函数能够接受许多参数，所以这看起来很复杂，但我们编写最大因子程序是为了处理许多参数。这在第3.3.3节有解释。
+如果参数中没有差分对象，我们只需将所需的表达式合成。如果有微分对象，我们需要对字面函数进行求导。要做到这一点，我们要从所有的参数中找到一个最大的因子，然后把参数的有限部分--没有这个因子的项分离出来。(部分导数本身就是字面函数，其表达式的构造包括参数索引。由此产生的微分对象是参数的有限部分的偏导与参数的无限小部分的内积。
+这一切都汇集在以下程序中： (define (literal-function fexp) (define (the-function . args) (if (any differential? args）（让（（n（长度args））（因子（应用最大因子args）））（让（（realargs（映射（lambda（arg）（有限部分arg因子））args））（deltargs（映射（lambda（arg）（无限小 part arg factor)) args)) (让((fxs (apply the-function realargs)) (partials (map (lambda (i) (apply (literal-function (deriv-expr i n fexp)) realargs)) (iota n)))) ( fold d: + fxs (map d:* partials deltargs))))) '(,fexp ,@args))) the-function) 练习3. 12: 具有结构化数值的函数 我们使extract-dx-part程序具有通用性（第110页），因此我们可以对差分对象和函数以外的数值进行扩展。扩展 extract-dx-part 以处理返回向量的函数的导数。注意：你还必须在提取器中扩展 replace-dx 通用过程（第 122 页）。
+
+3.4 高效的通用程序 在第3.2.3节中，我们通过使用元数据中提供的调度存储找到一个适用的规则来调度到一个处理程序：（定义（通用程序-调度元数据args）（让（（处理程序（get-通用程序-处理程序元数据args）））。(应用处理程序args)) 我们用来（在第89页）制作简单-通用程序构造器的调度存储（在第98页）的实现是相当粗糙的。简单的调度存储将规则集维护为一个规则的列表。每个规则被表示为一对适用性和处理程序。适用性是一个谓词的列表，用于适用于提交的参数。由simple-generic-procedure构造的泛型程序找到合适的处理程序的方法是依次扫描规则列表，寻找一个由参数满足的适用性。
+这是非常低效的，因为许多规则的适用性在给定的操作数位置可能有相同的谓词。例如，对于数字和符号算术系统中的乘法，可能有许多规则的第一个谓词是数字？因此，在找到一个适用的规则之前，数的谓语可能会被应用很多次。最好的办法是组织这些规则，以便找到一个适用的规则时不会进行多余的测试。这通常是通过使用一个索引来实现的。
+
+3.4.1 Tries 一种简单的索引机制是基于tree的。28 trie传统上是一个树形结构，但更普遍的是它可能是一个有向图。三元中的每个节点都有连接到后续节点的边。每条边都有一个相关的谓词。被测试的数据是一个特征的线性序列，在本例中是一个通用程序的参数。
+从三角形的根部开始，第一个特征被从序列中取出，并由根节点发出的边上的每个谓词进行测试。成功的谓词的边被带到下一个节点，这个过程在特征序列的其余部分重复进行。当我们用完特征时，当前节点将包含相关的值，在这种情况下，是一个适用于参数的处理器。
+在任何节点上，有可能有一个以上的谓词成功。如果发生这种情况，那么所有的成功分支都必须被遵循。因此，可能有多个适用的处理程序，而且必须有一个单独的方法来决定做什么。
+下面是我们如何使用 trie。评估下面的命令序列将逐步构建图3.1所示的三角。
+图3.1 trie可以用来对特征序列进行分类。trie是一个有向图，其中每条边都有一个谓词。从根部开始，第一个特征被从根部开始的边上的每个谓词所测试。如果一个谓词被满足，这个过程就会移动到该边的末端的节点，然后测试下一个特征。这在连续的特征中重复进行。序列的分类是到达的终端节点的集合。
+(定义a-trie (make-trie)) 我们可以给这个 trie 增加一条边 (define s (add-edge-to-trie a-trie symbol?)) 其中 add-edge-to-trie 返回位于新边的目标端的新节点。这个节点是通过与一个符号匹配而达到的。
+我们可以制作边缘链，这些边缘链被相应的边缘谓词列表所引用（define sn (add-edge-to-trie s number?) 节点sn从根部通过路径(list symbol? number? )到达。使用路径，有一个比重复调用add-edge-to-trie更简单的方法来制作一个边缘链：（define ss (intern-path-trie a-trie (list symbol? symbol?)) 我们可以给任何节点添加一个值（这里我们显示的是符号值，但我们以后会存储作为程序处理程序的值）。(tie-has-value? sn) #f (set-tie-value! sn '(symbol number)) (tie-has-value? sn) #t (tie-value sn) (symbol number) 我们也可以使用基于路径的接口来设置值 (set-path-value! a-trie (list symbol? symbol?) ' (symbol symbol)) (tri-value ss）（符号符号）注意，intern-path-trie和set-path-value！都尽可能地重用现有的节点和边，必要时增加边和结点。
+现在我们可以将一个特征序列与我们到目前为止所构建的三角形进行匹配。(equal? (list ss) (get-matching-tries a-trie '（a b）)) #t (equal? (list s) (get-matching-tries a-trie '(c))) #t 我们还可以将匹配与取值结合起来。过程get-a-value可以找到所有匹配的节点，挑选出一个有价值的节点，并返回该价值。
+(get-a-value a-trie '(a b)) (symbol symbol) 但不是所有的特征序列都有一个相关的值：(get-a-value a-trie '(-4)) ;无法匹配特征。(-4)我们可以逐步给三角形中的节点增加值：(set-path-value! a-trie (list negative-number?) '(negative-number)) (set-path-value! a-trie (list even-number?) '(even-number)) (get-all-values a-trie '(-4)) ((even-number) (negative-number) 其中get-all-values找到所有匹配某个特征序列的节点并返回其值。
+考虑到这个 trie 的实现，我们可以制作一个使用 trie 作为索引的 dispatch store。(define (make-trie-dispatch-store) (let ((delegate (make-simple-dispatch-store)) (trie (make-trie))) (define (get-handler args) (get-a-value trie args) (define (add-handler! applicability handler) ((delegate 'add-handler! ) applicability handler) (for-each (lambda (path) (set-path-value! trie path handler)) applicability)) (lambda (message) (case message ((get-handler) get-handler) ((add-handler!) add-handler!) (else (delegate message)))))) 我们通过将大部分操作委托给一个简单的调度库，使这个调度库变得简单。没有被委托的操作是add-handler！，它同时将处理程序存储在简单调度库和 trie 中，以及 get- handler，它只使用 trie 进行访问。简单调度库管理着默认的处理程序和规则集，这对调试很有用。这是一个使用委托来扩展接口的简单例子，与更著名的继承思想相反。
+
+练习3.13：三段式规则 为了方便实验不同的调度存储，我们给了泛型程序-构造器和make-generic-算术调度存储器。例如，我们可以像第95页那样建立一个完整的通用算术，但使用make-tree- dispatch-store，如下所示。(define tri-full-generic-arithmetic (let ((g (make-generic-arithmetic make-tree-dispatch- store)) (add-to-generic-arithmetic! g numeric-arithmetic) (extend-generic-arithmetic! g function-extender) (add-to-generic-arithmetic! g (symbolic-extender numeric-arithmetic) g)) (install-arithmetic! trie-full-generic-arithmetic) a. 这对我们在3.2.2节中纠结的对顺序的依赖性有什么改变吗？ b. 一般来说，谓词的什么特征会产生这样的情况：对一个参数序列有多个合适的处理程序？ c. 我们的通用算术代码中是否有这种情况？我们提供了一个粗略的工具来衡量我们调度策略的有效性。通过对任何计算进行with- predicate-counts的包装，我们可以找出每个调度谓词在一次执行中被调用的次数。例如，在一个通用的算术中，用一个基于三角形的调度存储来评估（fib 20），可能会产生这样的结果：29 （定义（fib n） （如果（< n 2） n （+ （fib （- n 1）） （fib （- n 2))))) （with-predicate-counts （lambda（） （fib 20））） (109453 number) (109453 function) (54727 any-object) (109453 symbolic) 6765 练习3.14：调度效率：被骗了！？鉴于这个性能工具，看一下（define (test-stormer-counts) (define (F t x) (- x)) (define numeric-s0 (make-initial-history 0 .01 (sin 0) (sin -。 01）（sin -.02））（with-predicate-counts (lambda () (x 0 ((evolver F 'h stormer-2) numeric-s0 1))))) 对于make-simple-dispatch-store中基于规则列表的调度，在算术中你可以得到。(define full-generic-arithmetic (let ((g (make-generic-arithmetic make-simple-dispatch- store)) ) (add-to-generic-arithmetic! g numeric-arithmetic) (extend-generic-arithmetic! g function-extender) (add-to-generic-arithmetic! g (symbolic-extender numeric-arithmetic) g) (install-arithmetic! full-generic-arithmetic)和基于三角形的版本(练习3.13)，在算术中你可以得到。(install-arithmetic! trie-full-generic-arithmetic) 对于某些问题，tree的性能应该比简单的规则列表好得多。我们预计，如果我们有大量具有相同初始段的规则，那么使用trie的性能会更好。
+理解这一点很重要，因为有时trie对性能没有帮助的事实似乎是反直觉的。我们明确地引入了trie来避免多余的调用。用一个简洁的段落来解释这个现象。
+为了获得更多的启示，请看一下两个实现中（fib 20）的性能。
+当不止一个处理程序适用于给定的参数序列时，不清楚如何使用这些处理程序；解决这种情况是解析策略的工作。在设计解决策略时有很多考虑。例如，选择最具体的处理程序的策略通常是一个好的策略；然而，我们需要更多的信息来实现这样的策略。
+有时，运行所有适用的处理程序并比较其结果是合适的。这可以用来捕捉错误并提供一种冗余。或者，如果我们有每个处理程序提供的部分信息，比如一个数字区间，不同处理程序的结果可以结合起来，以提供更好的信息。
+
+3.4.2 缓存 通过使用tries，我们消除了对参数谓词的多余的评估。我们可以通过使用抽象化来完全消除对谓词的评估，从而做得更好。谓词识别了一组与所有其他对象相区别的对象；换句话说，谓词和它所区分的集合实际上是一样的。在我们的tree实现中，我们使用谓词程序的平等性来避免冗余；否则我们会在tree中出现冗余的边，那就完全没有帮助了。这也是为什么使用谓词的组合不能很好地与 trie 的实现相混合。
+这里的问题是，我们想建立一个索引，根据谓词来区分对象，但是程序的不透明性使得它们作为索引的键时不可靠。
+我们真正想要的是为由给定谓词区分的集合分配一个名称。如果我们有办法通过表面检查从一个给定的对象中得到这个名字，我们就可以完全避免计算这个谓词。这个名字是一个 "类型"；但是为了避免混淆，我们将把这个名字称为标记。
+给定一个从对象中获取标签的方法，我们可以做一个缓存，保存先前派发产生的处理程序，并将其重复用于参数具有相同标签模式的其他派发。
+但是，在没有显式附加标签的情况下，这种方法有局限性，因为我们只能分辨出那些共享实现指定表示的对象。例如，区分一个数字和一个符号很容易，但区分一个素数就不容易了，因为一个实现对它们的特殊表示是不寻常的。
+我们将在第3.5节回到显式标签的问题上，但与此同时，仍有可能使用Scheme实现的表示标签来制作一个有用的缓存。给定一个特定于实现的过程information-type-name来获取对象的表示标记，我们可以制作一个缓存的dispatch存储：（define a-cached-dispatch-store (cache-wrapped-dispatch-store(make-tree-dispatch-store) implementation-type-name)）这个dispatch存储将一个缓存包裹在一个 trie dispatch存储中，但它也可以包裹一个简单dispatch存储。
+缓存调度库的核心是一个建立在哈希表上的备忘器。哈希表的键是由实现类型名称程序从参数中提取的表示标记列表。通过将 implementation-type-name 传递给这个 dispatch-store 包装器（作为 get-key），我们可以用它来为我们即将开发的更强大的标签机制制作缓存的 dispatch store。
+(define (cache-wrapped-dispatch-store dispatch-store get-key) (let ((get-handler (simple-list-memoizer eqv? (lambda (args) (map get-key args) (dispatch-store 'get-handler)))) (lambda (message) (case message ((get-handler) get-handler) (else (dispatch-store message_901) 对simple-list-memoizer的调用在其最后一个参数周围包裹了一个缓存，产生了一个备忘录的版本。第二个参数指定了如何从程序的参数中获得缓存的关键。eqv? 参数指定了在缓存中如何识别标签。
+练习 3.15: 缓存性能 使用我们在第130页为练习3.14所介绍的相同的性能工具，在缓存版本的dispatch中对(test-stormer- counts)和(fib 20)的执行进行测量，并使用练习3.14中探索的相同的通用算法。记录你的结果。它们是如何比较的？
+
+3.5 高效的用户定义类型 在第 3.4.2 节中，我们引入了标签作为调度的缓存机制的一部分。每个参数都被映射到一个标记，然后标记列表被用作缓存中的一个键，以获得处理程序。如果缓存中有一个与这个标签列表相关的处理程序，它就被使用。如果没有，就用谓词的 trie 来寻找适当的处理程序，并将其输入与标签列表相关联的缓存中。
+这个机制是相当粗糙的：可用于适用性规范的谓词被限制为那些对具有相同标签的任何两个对象总是给出相同的布尔值的谓词。
+所以对类型的区分不能比可用的标签更细。这些标签是特定于实现的符号，如对、向量或过程。所以这严重地限制了可能的谓词。例如，我们不可能有规则来区分满足偶数-整数的整数和满足奇数-整数的整数。
+我们需要的是一个标记系统，它可以使获取与数据项相关的标记变得容易计算，但标记并不局限于一小批特定的实现值。这可以通过给每个数据项附加一个标签来实现，可以用一个明确的数据结构或通过一个关联表。
+我们在这里有几个问题交织在一起：我们想在适用性规范中使用谓词；我们想有一个高效的调度机制；我们想能够指定可用于调度的谓词之间的关系。
+例如，我们希望能够说，谓词整数是谓词偶数-整数和奇数-整数的二元结，也希望整数是正数-整数、负数-整数和零的二元结。
+为了捕捉这样的关系，我们需要在谓词上放置元数据；但是添加关联查找来获取谓词的元数据，就像我们对函数的 arity 所做的那样（在第 28 页），会增加太多的开销，因为元数据将包含对其他标记的引用，而追逐这些引用必须是有效的。
+一个解决方法是注册所需的谓词。注册创建了一种新的标记，即与谓词相关的数据结构。这个标签将很容易附加到被谓词接受的对象上。该标签将提供一个方便的地方来存储元数据。
+我们将构建一个系统，其中每个不同的对象只能有一个标签，并且可以声明谓词之间的关系。这可能显得过于简单，但对于我们的目的来说是足够的。
+
+3.5.1 作为类型的谓词 让我们从一些简单的谓词开始。例如，原始过程exact-integer? 在我们的系统中被预先注册为一个简单的谓词。(predicate?#t exact-integer?) 现在让我们定义一个新的谓词，它不是一个原始的谓词。我们将在这个特别慢的素数测试上建立它。
+(define (slow-prime?n) (and (n:exact-positive-integer?n) (n:>= n 2) (let loop ((k 2)) (or (n:> (n:square k) n) (and (not (n:= (n:remainder n k) 0) ) (loop (n:+ k 1))))))) 注意，所有的算术运算符都以n:为前缀，以确保我们得到底层的Scheme运算。
+我们构建了素数？抽象谓词，它有一个用于错误信息的名称，以及一个对象被认为是素数的标准，即slow-prime?：（定义素数？(simple-abstract-predicate 'prime-number slow-prime?)) 过程simple-abstract-predicate创建了一个抽象谓词，这是一个巧妙的技巧，用于记忆一个昂贵的谓词（在这里是slow-prime?）的结果。一个抽象谓词有一个相关的构造函数，用来制造一个标记对象，由抽象谓词的标记和一个对象组成。该构造函数要求被标记的对象满足昂贵的谓词。由此产生的被标记的对象满足抽象谓词，并携带其标记。因此，被标记的对象可以通过使用快速的抽象谓词（或者说，通过对其标记的调度）来测试昂贵谓词所定义的属性。
+例如，抽象谓词prime-number? 被用来标记那些被验证为质数的对象，以便有效地实现泛型调度。这很重要，因为我们不想在调度过程中执行slow-prime? 来确定一个数字是否为素数。所以我们建立了一个新的标记对象，它包含一个标记（质数的标记）和一个数据（原始质数）。当一个通用程序被交给一个有标签的对象时，它可以有效地检索其标签并将其作为缓存键。
+为了制造有标签的对象，我们使用predicate- constructor来获取与抽象谓词相关的构造函数：（定义make-prime-number（predicate- constructor prim-number?））（定义short-list-of-primes（list（make-prime-number 2）（make-prime-number 7）（make-prime-number 31））) 构造函数make-prime-number要求它的参数是质数，正如slow-prime?所决定的：唯一可以被这个构造函数标记的对象是质数。
+(make-ime-number 4) ;质数的错误数据：4 3.5.2 谓词之间的关系 我们可以用抽象的谓词定义的集合可以相互关联。例如，素数是正整数的一个子集。正整数、偶数和奇数都是整数的子集。这一点很重要，因为任何适用于整数的操作都适用于任何子集的任何元素，但是有些操作可以适用于子集的某个元素，而不能适用于包围的超集的所有元素。例如，偶数可以减半而不留余数，但全整数就不是这样了。
+当我们定义初等数时，我们有效地定义了一个对象集。但这个集合与exact-integer?定义的集合没有任何关系：（exact-integer? (make-prime-number 2)) #f 我们希望这些集合能有适当的关系，这可以通过给谓词本身添加一些元数据来实现。(set-predicate<=! prim-number? exact-integer?) 这个过程set-predicate<=! 修改了其参数谓词的元数据，以表明由第一个参数定义的集合是由第二个参数定义的集合的（非严格）子集。在我们的例子中，由prime-number? 定义的集合被声明为由exact-integer? 定义的集合的一个子集。一旦这样做了，exact-integer? 就会识别我们的对象：（exact-integer? (make-ime-number 2)) #t
+
+3.5.3 谓词是调度键 我们所定义的抽象谓词适合用于通用调度。甚至更好的是，它们可以被用作缓存键，以使调度高效。正如我们上面所描述的，当一个谓词被注册时，一个新的标记被创建并与该谓词关联。我们所需要的是一种获取给定对象的标签的方法：过程 get-tag 做到了这一点。
+如果我们将get-tag作为get-key的参数传递给cache-wrapped-dispatch-store，我们就有了一个有效的实现。然而，由于由谓词定义的集合可以有子集，我们需要考虑这样一种情况：对于某些给定的参数有多个潜在的处理程序。有许多可能的方法来解决这种情况，但最常见的是通过某种方式确定 "最具体 "的处理程序，并调用该处理程序。由于子集关系是一个部分顺序，可能不清楚哪个处理程序是最具体的，所以实现必须通过独立的方法来解决这个模糊的问题。
+这里是一个这样的实现。它使用一个过程rule<将匹配的规则排序到一个适当的顺序，然后从结果中选择一个处理程序。30 (define (make-subsetting-dispatch-store-maker choose-handler) (lambda () (let ((delegate (make-simple-dispatch-store)) ) (define (get-handler args) (let ((matching (filter (lambda (rule) (is-generic-handler-applicable? rule args)) (((delegate 'get-rules))))) (and (n:pair? matching) (choose-handler ; from sorted handlers (map cdr (sort matching rule<)) ((delegate 'get-default-handler)))))) (lambda (message) (case message ((get-handler) get-handler) (els (delegate message))))))) 程序make-most-specific-dispatch-store选择排序后的第一个处理程序作为有效的处理程序：（定义make-most-specific-dispatch-store (make-subsetting-dispatch-store-maker (lambda (handlers default-handler) ( car handlers)))) 另一个可能的选择是做一个 "链式 "调度库，其中每个处理程序得到一个参数，可以用来调用排序序列中的下一个处理程序。这对于子集处理程序想要扩展超集处理程序的行为而不是覆盖它的情况很有用。我们将在第3.5.4节的冒险游戏的时钟处理程序中看到这样的例子。
+(define make-chaining-dispatch-store (make-subsetting-dispatch-store-maker (lambda (handlers default-handler) (let loop ((handlers handlers)) (if (pair? handlers) (let ((handler (car handlers)) (Next-handler (loop (cdr handlers)))) (lambda args (apply handler (cons next-handler args)))) default-handler_901） 这些调度库中的任何一个都可以通过添加一个缓存包装器变成一个缓存调度库：（定义（make-cached-most-specific-dispatch-store）（缓存包装的调度库（make-most-specific-dispatch-store）get-tag））（定义（make-cached-chaining-dispatch-store）（缓存包装的调度库（make-chaining-dispatch-store）get-tag）) 然后我们创建相应的通用程序构造函数。(define most-specific-generic-procedure (generic-procedure-constructor make-cached-most-specific-dispatch-store)) (define chaining-generic-procedure (generic-procedure-constructor make-cached-chaining-dispatch-store)
+
+3.5.4 示例。一个冒险游戏 一个传统的世界建模方式是 "面向对象编程"。这个想法是，被建模的世界是由对象组成的，每个对象都有独立的局部状态，而且对象之间的耦合是松散的。每个对象都被认为有特定的行为。一个对象可以接收来自其他对象的消息，改变其状态，并向其他对象发送消息。
+这对于我们希望建模的行为不依赖于多个信息源的协作的情况来说是非常自然的：每个消息都来自其他对象。这是对程序组织的一个严格约束。
+还有其他的方法可以将一个问题分成几块。我们已经对 "算术 "进行了足够的研究，看到一个运算符的意义，如* ，可以取决于多个参数的属性。例如，一个数字和一个向量的乘积与两个向量或两个数字的乘积是不同的运算。31 考虑到用通用程序对一个由 "地方"、"事物 "和 "人 "组成的世界进行建模的问题。那些被认为是实体的局部的状态变量应该如何表示和包装？哪些操作对哪些类型的实体是合适的通用操作？既然将实体分成类型（或集合）并将一些操作表达为适合于一个包容性集合的所有成员是很自然的，那么如何安排子类型呢？任何面向对象的观点都会规定这些设计问题的具体答案；在这里我们有更多的自由，必须设计将要使用的约定。
+为了说明这个过程，我们将为一个简单的冒险游戏建立一个世界。这里有一个由通道连接的房间网络，居住着各种生物，其中一些生物是自主的，它们可以四处游荡。有一个由玩家控制的头像。有一些东西，其中一些可以被生物拿起和携带。有一些生物可以互动的方式：巨魔可以咬另一个生物并使其受损；任何生物都可以拿另一个生物携带的东西。
+我们世界中的每个实体都有一套命名的属性。其中有些是固定的，有些是可以改变的。例如，一个房间有通往其他房间的出口。这些代表了网络的拓扑结构，不能被改变。一个房间也有内容，例如目前在房间里的生物和可能获得的东西。一个房间的内容随着生物的移动和它们携带的东西进出其他房间而改变。我们将对这组命名的属性进行计算建模，作为一个从名称到属性值的表格。
+有一套适合于这个世界的通用程序。例如，有些东西，如书、生物和头像，是可以移动的。在每一种情况下，移动一个东西需要从源的内容中删除它，把它添加到目的地的内容中，并改变其位置属性。这个操作对于书、人和巨魔都是一样的，它们都是 "可移动事物 "集合的成员。
+一本书可以被阅读；一个人可以说些什么；一个巨魔可以咬住一个生物。为了实现这些行为，有一些书的特定属性，与人或巨魔的属性不同。但是这些不同种类的可移动的东西有一些共同的属性，比如说位置。所以当这样的东西被实例化时，它必须为其所有的属性做一个表，包括那些从更具包容性的集合中继承的属性。实现诸如移动这样的操作符的行为的规则必须能够找到适当的处理程序来操纵每种情况下的属性。
+
+游戏 我们的游戏是在麻省理工学院的粗糙拓扑图上进行的。有各种自主代理（非玩家角色），如学生和官员。例如，登记员是一个巨魔。有可移动的和不可移动的东西，可移动的东西可以被自主代理或玩家的化身拿走。虽然这个游戏没有什么细节，但可以扩展到非常有趣。
+我们创建一个会话，有一个名为gjs的化身，他出现在一个随机的地方。游戏告诉玩家关于化身的环境。
+(start-adventure 'gjs) You are in dorm-row You see here: registrar You can exit: east Since the registrar is here it is prudent to leave! (他可能会咬人，咬够了之后，化身就会死亡。 ) (go 'east) gjs从东边的出口离开 gjs进入7号大厅 你在7号大厅 你可以看到：10号大厅 无限走廊 你可以离开：上西东 alyssa-hacker进入7号大厅 alyssa-hacker说。嗨，gjs ben-bitdiddle进入大厅-7 ben-bitdiddle说：嗨，allyssa-hacker gjs registrar进入大厅-7 registrar说：嗨，ben-bitdiddle alyssa-hacker gjs 注意，几个自主代理在化身之后到达，而且他们是一次一个。所以我们看到，报告是模拟时间的间隔，而不是一个瞬间状态的总结。这是我们实现的一个假象，而不是故意的设计选择。
+不幸的是，登记员也跟着来了，所以又到了离开的时候。
+(说 "我已经离开这里了！") gjs说：我已经离开这里了。(go 'east) gjs通过东边的出口离开 gjs进入10号大厅 你在10号大厅 你可以看到：7号大厅 无限走廊 大庭院 你可以离开：东 南 西 上 (go 'up) gjs通过上边的出口离开 gjs进入10-250 你在10-250 你在这里看到：黑板 你可以离开：上 下 10-250室是个演讲厅，有一块大黑板。也许我们可以拿走它？(take-thing 'blackboard) Blackboard is not movable So sad-gjs loves blackboards. 我们继续四处看看吧。
+(go 'up) gjs通过向上的出口离开 gjs进入barker-library 你在barker-library 你在这里看到：engineering-book 你可以离开：up down 一声惊天动地、刺破灵魂的尖叫传来......
+很明显，一个巨魔（也许是登记员）吃了人。
+然而，这里有一本书，应该是可以拿的，所以我们拿着它，回到了讲堂。
+(take-thing 'engineering-book) gjs拿起engineering-book (go 'down) gjs通过向下的出口离开 gjs进入10-250 你在10-250 你的包里有：engineering-book 你在这里看到：黑板 你可以离开：up down 从报告厅我们回到10号大厅，在那里我们遇到了lambda-man，他迅速地偷走了我们的书。
+(go 'down) gjs通过向下的出口离开 gjs进入10号大厅 gjs说：Hi lambda-man 你在10号大厅 你的包里有：工程书 你在这里看到：lambda-man 你可以看到：7号大厅 无限走廊 大庭院 你可以离开：东 南 西 上 alyssa-hacker进入10号大厅 alyssa-hacker说：Hi gjs lambda-man lambda-man从gjs手里拿了工程书 gjs说。Yaaaah! 我很难过!
+
+对象类型 为了在我们的游戏中创建一个对象，我们用make-property定义一些属性，用make-type定义一个类型谓词，用type-instantiator获得该谓词的相关实例，然后用适当的参数调用该实例。
+我们如何制造一个巨魔？巨魔的make-troll构造函数接受参数，这些参数指定了被构造的特定巨魔的属性值。巨魔将在一个给定的地方被创造出来，它具有不安性（喜欢到处走动）、获取性（喜欢拿东西）和饥饿性（喜欢咬别人）。
+(define (create-troll name place restlessness hunger) (make-troll 'name name 'location place 'restlessness restlessness 'acquisitiveness 1/10 'hunger hunger) 我们创建两个巨魔：Grendel和Registrar。它们最初被放置在随机的地方，有一些随机的倾向性。
+(define (create-controlls places) (map (lambda (name) (create-controll name (random-choice places) (random-bias 3) (random-bias 3))) '(grendel registrar)) 程序随机选择从给定的列表中随机选择一个项目。过程random-bias选择一个数字（在这里是1、2或3）并返回其倒数。
+巨魔类型被定义为一个仅对巨魔为真的谓词。
+Make-type程序被赋予了一个类型的名称和一个巨魔特有的属性的描述符。(只有巨魔才有饥饿属性。) (define troll:hunger (make-property 'hunger' predicate bias?)) (define troll? (make-type 'troll (list troll:hunger))) 巨魔是一种特殊类型的自主代理。因此，巨魔的集合是自主代理集合的一个子集（<= ）。
+(set-predicate<=! troll? autonomous-agent?) 巨魔的构造函数直接来自定义类型的谓词，饥饿属性的访问器也是如此。
+(define mak-troll (type-instantiator troll?)) (define get-hunger (property-getter troll:hunger troll?)) 自主代理偶尔会受到 "时钟 "的刺激而采取一些行动。巨魔的独特行动是咬其他的人。
+(define-clock-handler troll? eat-people!)一个有偏见的硬币被抛出，以确定巨魔此刻是否饥饿。如果它饿了，它就会寻找其他人（巨魔也是人！），如果有一些人，它就会选择一个人来咬，使受害者受到一些伤害。叙述者描述了所发生的一切。
+(define (eat-people! troll) (if (flip-coin (get-hunger troll)) (let ((people (people-here troll))) (if (n:null? people) (narrrate! (list (possessive troll) "belly rumbles") troll) (let (((people (random-choice people))) (n:null? (list troll "takes a bite out of" victim) troll) (suffer! (随机数3) victim)))))) 过程flip-coin产生一个介于0和1之间的随机分数，如果该分数大于参数，则返回true。
+过程random-number返回一个小于或等于其参数的正数。
+过程narrate！是用来给故事添加旁白的。
+的第二个参数 narrate! ( 上述代码中的troll)的第二个参数可以是任何有位置的东西。叙述者在这样确定的位置上宣布其第一个参数。一个人只有在那个位置上才能听到这个宣布。
+我们说过，巨魔是一种自主代理。自主代理的类型是由其谓词定义的，它规定了这种代理所需的属性。我们还规定，自主代理的集合是所有人员集合的一个子集。
+(define autonomous-agent:restlessness (make-property 'restlessness 'predicate bias?)) (define autonomous-agent:acquisitiveness (make-property 'acquisitiveness 'predicate bias?) (define autonomous-agent? (make-type 'autonomous-agent (list autonomous-agent:restlessness autonomous-agent:acquisitiveness)) (set-predicate<=! autonomous-agent? person?) 巨魔的构造函数指定了躁动性和获取性的值，这是做一个自主代理所需要的，此外还有巨魔特有的饥饿属性。由于巨魔是自主代理，而自主代理是人，所以也必须有人和其所有超集的属性值。在这个系统中，几乎所有的属性都有默认值，如果没有指定，就会自动填充。例如，所有对象都需要名字；名字在巨魔的构造函数中被指定。但是一个人也有一个健康属性，是积累伤害所必需的，而这个属性值在巨魔的构造函数中没有明确指定。
+
+通用程序 现在我们已经看到了对象是如何建立的，我们将看看如何实现它们的行为。具体来说，我们将看到泛型程序是如何成为描述复杂行为的有效工具的。
+我们定义了get-hunger，在eat-people!中使用，是以属性getter的方式。一个给定类型的对象的属性的getter被实现为一个泛型过程，它接受一个对象作为参数并返回该属性的值。
+(define (property-getter property type) (let ((procedure; the getter (most-specific-generic-procedure (symbol 'get- (property-name property)) 1; arity #f)) 。默认的处理程序 (define-generic-procedure-handler procedure (match-args type) (lambda (object) (get-property-value property object)) procedure)) 这显示了一个具有生成名称（例如get-hunger）的通用程序的构造，它只需要一个参数，并添加了一个处理程序来进行实际的访问。Most-specific-generic-procedure的最后一个参数是该过程的缺省处理程序；指定#f意味着缺省处理程序将发出错误信号。
+我们还使用了define-clock-handler来描述当时钟跳动时要采取的行动。这个过程只是给已经构建好的通用过程clock-tick! 增加了一个处理程序。
+(define (define-clock-handler type action) (define-generic-procedure-handler clock-tick! (match-args type) (lambda (super object) (super object) (action object))))) 这个通用程序支持 "链式"，即每个处理程序得到一个额外的参数（在这里是super），当被调用时，任何定义在给定对象的超集上的处理程序都会被调用。传递给super的参数与这里收到的参数具有相同的含义；在这种情况下，只有一个参数，它被传递。这与Java等语言中使用的机制基本相同，尽管在这种情况下是用一个神奇的关键字而不是一个参数来完成的。
+调用clock-tick！过程是为了触发一个动作，而不是为了计算一个值。注意，我们指定的动作将在超集所指定的任何动作之后进行。我们可以选择先做给定的动作，然后再做其他的动作，只要改变调用的顺序就可以了。
+通用程序组织的真正威力是通过移动事物的机制来说明的。例如，当我们拿起工程书的时候，我们把它从房间里移到我们的包里。这是由移动过程实现的。
+
+(define (move! thing destination actor) (generic-move! thing (get-location thing) destination actor)) 移动！过程是用一个更通用的过程generic-move！来实现的，它需要四个参数：要移动的东西，东西的当前位置，它的目标位置，以及移动过程的actor。这个过程是通用的，因为移动行为有可能取决于所有参数的类型。
+当我们创建 generic-move! 时，我们还指定了一个非常通用的处理程序来捕捉那些没有被更具体的处理程序（针对特定的参数类型）覆盖的情况。
+(定义 generic-move! (most-specific-generic-procedure 'generic-move! 4 #f)) (define-generic-procedure-handler generic-move! (match-args thing? container? container? person?) (lambda (thing from to actor) (告诉! (list thing "is not movable") actor))) 程序tell！将信息（它的第一个参数）发送给试图移动该事物的演员。如果该角色是头像，则显示该信息。
+在这个演示中，我们拿起了那本书。我们通过调用名为engineering-book的过程take-thing来做到这一点。这个过程将这个名字解析为事物，然后调用take- thing! (define (take-thing name) (let ((thing (find-thing name (here)))) (if thing (take-thing! thing my-avatar))) 'done) (define (take-thing! thing person) (move! thing (get-bag person) person) ) 这里有两个程序。第一个程序是一个用户界面程序，给玩家一个方便的方式来描述要拿的东西，给出它的名字。它调用第二个程序，这是一个内部程序，也在其他地方使用。
+为了使其发挥作用，我们为generic-move！提供了一个处理程序，专门用于将移动的东西从地方转移到袋子里：（define-generic-procedure-handler generic-move! (match-args mobile-thing? place? bag? person?) (lambda (mobile-thing from to actor) (let ((new-holder (get-holder to))) (cond ((eqv? actor new-holder) (narrate! (list actor "pick up" mobile-thing) actor)) (else (narrate! (list actor "pick up" mobile-thing "and gives it to" new-holder) actor)) (if (not (eqv? actor new-holder)) (say! new-holder (list "Whoa! Thanks, dude!") (move-internal! mobile-thing from to)))) 如果演员正在拿这个东西，那么演员就是新的持有者。但也有可能是演员在原地拿起东西，然后把它放进别人的包里！（say! 说！程序是用来表示一个人说了什么。它的第一个参数是说话的人，第二个参数是正在说的文字。move-internal！过程实际上是将物体从一个地方移到另一个地方。
+为了丢弃一个东西，我们使用程序drop-thing把它从我们的包里移到我们当前的位置：（定义（drop-thing name）（让（（thing（find-thing name my-avatar）））（如果thing（drop-thing！thing my-avatar））'done）（定义（drop-thing！thing person）（move！thing（get-location person）person））下面是generic-move！的处理程序，可以丢弃一个东西。行为体可能从它自己的包里丢出一个东西，或者它可能从另一个人的包里拿起一个东西并丢出。
+(define-generic-procedure-handler generic-move! (match-args mobile-thing? bag? place? person?) (lambda (mobile-thing from to actor) (let ((former-holder (get-holder from)) (cond ((eqv? actor former-holder) (narrate! (list actor "drops" mobile-thing) actor)) (other (narrate! (list actor "take" mobile-thing "from" former-holder "and drops it") actor))(if (not (eqv? actor former-holder)) (say! former-holder (list "What did you do that for?")) (move-internal! mobile-thing from to)))))
+
+然而，另一个通用的移动！处理程序通过把一个东西从一个包里移到另一个包里，提供了赠与或偷窃东西的功能。
+这里的行为取决于行为者、东西的原始持有者和东西的最终持有者之间的关系。
+(define-generic-procedure-handler generic-move! (match-args mobile-thing? bag? bag? person?) (lambda (mobile-thing from to actor) (let ((former-holder (get-holder from)) (new-holder (get-holder to))) ( cond ((eqv? from to) (tell! (list new-holder "is already carrying" mobile-thing) actor)) ((eqv? actor former-holder) (narrate! (list actor "giving" mobile-thing "to" new-holder) actor)) ((eqv? actor new-holder) (narrate! (list actor "takes" mobile-thing "from" former-holder) actor)) ((else (narrate! (list actor "takes" mobile-thing "from" former-holder "and gives it to" new-holder) actor))(如果(not (eqv?actor former-holder)) (say! former-holder (list "Yaaaah! I am upset!")) (如果(not (eqv?actor new-holder)) (say! new-holder (list "Whoa! Where'd you get this?")) (如果（不是（eqv?从至）) (move-internal! mobile-thing from to)))))。另一个有趣的情况是一个人从一个地方到另一个地方的运动。这是由以下处理程序实现的：（define-generic-procedure-handler generic-move! (match-args person? place? place? person?) (lambda (person from to actor) (let ((exit (find-exit from to))) (cond ((or (eqv? from (get-heaven)) (eqv? to (get-heaven)) (move-internal! person from to)) ((not exit) (tell! (list "There is no exit from" from "to" to) actor)) ((eqv? person actor) (narrate! (list person "leaves via the" (get-direction exit) "exit") from) (move-internal! person from to)) (other (tell! (list "You can't force" person "to move!") actor)))))) 可以有许多其他的处理程序，但重要的是要看到，移动过程的行为可以取决于所有参数的类型。这提供了一个干净的行为分解，使之成为可以单独理解的块状物。在传统的面向对象的设计中，要实现这样一个优雅的分解是相当困难的，因为在这样的设计中，必须选择一个参数作为主要的调度中心。它应该是被移动的东西、源位置、目标位置、行为者吗？任何一个选择都会使情况变得比必要的更复杂。
+正如Alan Perlis所写的："让100个函数在一个数据结构上操作，比10个函数在10个数据结构上操作要好"。
+
+实现属性 我们看到，我们游戏中的对象是通过用make-property定义一些属性，用make-type定义一个类型谓词，用type-instantiator获得谓词的相关实例，然后用适当的参数调用该实例来创建。这个简单的描述隐藏了一个复杂的实现，值得探索。
+这段代码的有趣之处在于，它为管理与类型实例相关联的属性提供了一个简单而灵活的机制，在使用子类型时，它是稳健的。
+属性由抽象对象而不是名字来表示，以避免子类型化时的命名空间冲突。例如，一个哺乳动物类型可能有一个名为前肢的属性，指的是典型的前腿。哺乳动物的一个子类型蝙蝠可能有一个同名的属性，它指的是一个不同的对象，一个翅膀 如果属性是由它们的名字指定的，那么这些类型中的一个将需要改变它的名字。在这个实现中，属性对象是由它们自己指定的，两个具有相同名称的属性是不同的。
+过程make-property创建了一个数据类型，包含一个名称、一个谓词和一个默认值供应商。它的第一个参数是属性的名称，其余的参数是一个属性列表，包含关于该属性的额外元数据。例如，请看第143页roll:hunger的定义。我们将忽略属性列表是如何被解析的，因为它并不有趣。32 (define (make-property name . plist) (guarantee n:symbol? name) (guarantee property-list? plist) (%make-property name (get-predicat-property plist) (get-default-supplier-property plist)) 一个属性被实现为一个Scheme记录[65]，它是一个由一组命名的字段组成的数据结构。它由精心设计的语法定义，为每个字段指定一个构造函数、一个类型谓词和一个访问器：（define-record-type <property> （%make-property name predicate default-supplier） property? (name property-name) (predicate property-predicate) (default-supplier property-default-supplier)) 我们选择给原始记录构造函数%make-property一个带有初始百分号（%）的名字。我们经常使用最初的百分号来表示一个低级的过程，这个过程除了支持高级的抽象之外不会被使用。%make-property过程只在make-property中使用，而后者又被系统的其他部分所使用。
+给定一组属性，我们可以构造一个类型谓词：（定义（make-type name properties）（guarante-list-of property? properties）（让（（类型（simple-abstract-predicate name instance-data?） (%set-type-properties! type properties) type)) 一个类型谓词是一个普通的抽象谓词（见第134页），连同指定的属性，这些属性使用%set-type-properties!存储在一个关联中。这些指定的属性本身并不被使用；相反，它们与这个类型的超集的属性聚合在一起。被标记的对象满足instance-data? 它是一个从这个类型的属性到其值的关联。
+(define (type-properties type) (append-map %type-properties (cons type (all-supertypes type))))) type-instantiator建立了实例化器，它接受一个以属性名称为键的属性列表，解析该列表，并使用产生的值来创建实例数据，它将这个实例的每个属性与其值联系起来。它还调用set- up！过程，这使我们有能力进行特定类型的初始化。
+(define (type-instantiator type) (let ((constructor (predicate-constructor type)) (properties (type-properties type))) (lambda plist (let (( object (constructor (parse-plist plist properties)))) (set-up! object) object))))
+
+练习3.16：冒险热身 加载冒险游戏，通过执行命令（start-adventure your-name）开始模拟。让你的头像四处走动。找到一些可拿的东西并拿走它。把你拿的东西放到其他地方。
+练习3.17：健康 改变一个人的健康状况，使其具有比初始游戏中更多的可能值。缩放你的表示方法，使被巨魔咬死的概率与你改变表示方法之前的相同。也要使被巨魔咬伤或其他健康损失有可能通过某些周期的休息来恢复。
+练习3.18：医疗帮助 做一个新的地方，医疗中心。让它很容易从绿色建筑和盖茨塔上到达。如果一个受到非致命伤害的人（也许是被巨魔咬伤）能到医疗中心，他们的健康可能会得到恢复。
+练习3.19：帕拉提尔 制作一种新的东西，叫做帕拉提尔（"看见的石头"，如托尔金的《指环王》）。每个帕拉提尔的实例都可以与其他任何实例进行交流；所以如果在10号大厅有一个帕拉提尔，在宿舍楼有另一个，你可以通过观察10号大厅的帕拉提尔来观察宿舍楼的情况。(基本上，帕拉提尔是一个神奇的监控摄像头和显示器。）在校园的各个地方种植一些不可移动的帕拉提尔，并让你的化身使用其中一个。你能监视你朋友的位置吗？巨魔的位置？你能让你的化身以外的人自主地使用帕拉提尔来达到某些有趣的目的吗？大学校长可能是一个合适的选择。
+练习3.20: 隐身 做出一件 "隐身斗篷"，任何人（包括化身）都可以获得隐身的效果，从而不受巨魔的攻击。但是，这个斗篷必须在很短的时间内被丢弃（放弃），因为拥有这个斗篷会使人的健康状况慢慢下降。
+练习3.21：轮到你了 现在你已经有机会玩玩我们的人物、地点和事物的 "世界 "了，请以某种实质性的方式扩展这个世界，只受限于你的创造力。一个想法是有移动的地方，比如电梯，它的入口和出口随时间变化，也许可以由人控制。但这只是一个建议--发明一些你喜欢的东西吧! 练习3.22：多角色 这是一个相当大的项目，而不是一个简单的练习。
+a. 扩展这个冒险游戏，以便可以有多个玩家，每个人控制一个个人头像。
+b. 使玩家有可能在不同的终端上。
+
+3.6 小结 本章介绍的泛型程序的使用既强大又危险，它不适合胆小的人。允许程序员动态地改变语言中原始操作符的含义，可能会导致无法管理的代码。但是如果我们小心翼翼地将运算符扩展到新的参数类型，而不改变它们在原始类型上的行为，我们就可以得到强大的扩展而不破坏任何旧的软件。
+大多数编程语言不允许自由修改原始操作符的现有行为，这是有道理的。
+然而，这里的许多想法是可移植的，可以安全地使用。例如，在许多语言中，如C++和Haskell，人们可以对运算符进行重载，以便在用户定义的类型上有新的含义。
+算术的扩展是相当温和的，但我们必须意识到可能出现的问题，以及可能被唤起的微妙的错误：整数的加法是关联的，但浮点数的加法不是关联的；数字的乘法是交换的，但矩阵的乘法不是。如果我们把加法扩展为字符串的连接，这种扩展也不是换元的。从好的方面看，将算术扩展到包含字面数字和纯数字量的符号表达式是很直接的。继续扩展到函数、向量、矩阵和张量并不困难，但需要大量的工作。然而，我们最终会在扩展的排序上遇到真正的问题--符号化的向量与具有符号化坐标的向量是不一样的! 我们还可能在符号函数的类型方面遇到复杂的问题。
+可扩展泛型力量的一个美丽的例子是，通过扩展每个原始算术过程来处理微分对象，几乎微不足道地实现了正向模式的自动微分。然而，让这一方法在将函数作为值返回的高阶函数中正确工作是很困难的。(当然，大多数编写需要自动微分的应用程序的程序员不需要担心这个复杂的问题）。在我们的系统中，"类型 "是由一个谓词表示的，这个谓词对该类型的元素是真的。为了使之有效，我们引入了一个谓词注册和标记系统，允许我们添加类型间关系的声明。例如，我们可以让素数成为整数的一个子集，所以满足用户定义的素数谓词的数字自动满足整数谓词。
+一旦我们有了用户定义的具有声明子集关系的类型，我们就进入了一个新的可能性领域。我们用一个简单但优雅的可扩展的冒险游戏来证明这一点。因为我们的泛型过程对其所有参数的类型进行派发，所以在我们的冒险游戏中对实体行为的描述要比我们对第一个参数进行派发以产生一个对第二个参数进行派发的过程简单得多，而且更加模块化。因此，在一个典型的单一派发的面向对象系统中对这些行为进行建模会更加复杂。
+我们使用标签数据来有效地实现可扩展的通用程序。数据被标记了所需的信息，以决定使用哪些程序来实现指定的操作。但是，一旦我们有能力对数据进行标记，还有其他的用途，标记可以被投入使用。例如，我们可以用它的出处来标记数据，或者它是如何得出的，或者它所基于的假设。这样的审计跟踪对于访问控制、追踪敏感数据的使用或调试复杂的系统都很有用[128]。因此，除了使用标签来确定通用程序的处理程序之外，将任意的标签附加到任何数据项的能力也是很强大的。
+
+1 ODE指的是 "常微分方程"，意思是单独立变量的微分方程。
+2因为我们预计会改变MIT/GNU Scheme系统中许多运算符的含义，所以我们做了一组特殊的运算符，命名我们以后可能需要的原始程序。
+我们用前缀n:来命名这些副本。在MIT/GNU Scheme中，原始的原始程序总是可以在system-global-environment中找到，并且有它们原来的名字，所以我们可以选择从那里获得它们。
+3A 最近的Scheme标准[109]引入了 "库"，它提供了一种方法来指定程序中自由引用的绑定。我们可以用库来连接一个算术和使用它的代码。但在这里，我们通过修改read-eval-print的环境来证明这些想法。
+4 该程序pp通过使用换行和缩进来显示列表的结构，从而 "漂亮地 "打印出一个列表。
+5 你可能已经注意到，在这些符号表达式中，加法和乘法被表述为二进制运算，尽管在Scheme中它们被允许接受许多参数；安装程序将n-ary版本实现为嵌套二进制运算。同样地，单数的"-"也被转换为 "否定"。
+带有多个参数的减法和除法也被实现为嵌套的二进制操作。
+6过程default-object产生一个与任何可能的常数不同的对象。过程default-object? 确定了这个值。
+7另一个你可能已经注意到的区别是，数字算术的常数生成器和操作生成器过程只有一个形式参数，而符号扩展器的生成器过程则有两个。符号算术是建立在基数算术上的，所以基数算术的常数或操作是给生成器的。
+8 调用(any-arg 3 p1? p2?)将产生一个有七种情况的适用性规范，因为有七种方式可以满足这个适用性。((p2? p2? p1?) (p2? p1? p2?) (p2? p1? p1?) (p1? p2? p2?) (p1? p2? p1?) (p1? p1? p2?))
+
+9disjoin* 是一个谓词组合器。它接受一个谓词的列表，并产生作为它们的相交的谓词。
+10 作出这种任意的选择其实是不合理的。例如，一个向量的零点不仅与数字零点不同，而且对于不同维度的向量来说也是不一样的。
+我们在此选择忽略这个问题。
+11 在APL-79会议上，据说Joel Moses曾说过 "APL就像一颗美丽的钻石--毫无瑕疵，美丽对称。但你不能给它添加任何东西。如果你试图粘上另一颗钻石，你不会得到一个更大的钻石。Lisp就像一团泥巴。添加更多，它仍然是一个泥球--它仍然看起来像Lisp"。但Joel否认他说过这句话。
+12 这种机制在大多数 "面向对象的语言 "中是隐含的，但它通常与本体论机制（如继承）紧密结合。可扩展泛型的基本思想出现在SICP[1]中，并在tinyCLOS[66]和SOS[52]中得到有益的提供。一个基于谓词调度的可扩展泛型系统被用来实现SICM[121]的数学表示系统。Ernst[33]对谓词调度进行了很好的阐述。泛型程序是一个强大的工具的想法已经在Lisp社区中渗透了几十年。这些思想最充分的发展是在Common Lisp Object System（CLOS）[42]中。底层结构在Metaobject协议[68]中得到了很好的表达。它在 "面向方面的编程 "运动中得到了进一步的阐述[67]。
+13 generic-metadata-getter和generic-metadata-default-getter从存储在泛型程序元数据中的dispatch-store实例中检索得到handler程序和得到default-handler程序。
+14 术语自动分化是由Wengert[129]在1964年提出的。
+15 这里的导数是一个函数的导数，而不是一个表达式的导数。如果f是一个函数，f的导数Df是一个新的函数，当它应用于x时，会得到一个值Df（x）。
+它与表达式导数的关系是：16 我们在这里介绍的自动微分代码来自于我们为支持Sussman与Jack Wisdom在麻省理工学院教授的高级经典力学课而编写的代码[121, 122]。
+17 像这样的微分对象有时被称为双数。对偶数由克利福德在1873年提出[20]，通过毗连一个属性为є2=0的新元素E来扩展实数。然而，为了方便地计算多个导数（以及具有多个参数的函数的导数），有助于为每个自变量引入一个新的无穷小部分。所以我们的微分代数空间要比单E双数空间复杂得多。我们的微分对象也是类似于Edwin Hewitt在1948年发明的超实数[59]的东西。
+
+18 这个想法是由丹-祖拉（当时在惠普公司）和杰拉尔德-杰-萨斯曼在1992年的一次彻夜编程狂欢中 "发现 "的。我们当时认为这也被很多人发现了，事实上也是如此[129, 12]，但是当我们自己第一次理解这个想法的时候，我们感到非常高兴! 关于自动微分的正式阐述，见[94]。
+19 我们很快就会接触到二元函数。这只是为了在事情变得复杂之前让大家明白这个想法。我们将在第3.3.2节中扩展到n-ary函数 20 我们展示的是处理程序的定义，但我们在这里没有展示处理程序的分配。
+21 关于另一种策略，请参阅第113页的练习3.8。
+22 过程iota返回一个从0到（长度为args）的连续整数的列表。
+23 正式的代数细节是由Hal Abelson在1994年左右澄清的，作为修复一个错误的努力的一部分。1997年，在Hardy Mayer和Jack Wisdom的帮助下，Sussman痛苦地重写了这段代码。
+24 一个更好的版本是使用记录结构，但如果没有办法很好地打印它们，就更难调试了。
+25 系列中任何最高阶项的任何因子都可以使用这一事实是Hal Abelson在1994年修订这一想法时的核心见解。
+26 2011年Alexey Radul向我们指出了这一类的错误。一般的问题是由Siskind和Perlmutter在2005年首次发现的[111]：为区分导数计算的参数递增的无限小数而创建的微分标签在评估一个值为函数的导数时可能会被混淆。延迟的导数程序可能会被多次调用，使用为外部导数计算创建的标签。最近，Jeff Siskind向我们展示了另一个困扰我们的第一个补丁的bug：在一个参数中出现的标签和一个从导数函数的词法范围中继承的标签之间存在潜在碰撞。这些非常微妙的bug在Manzyuk等人的一篇漂亮的论文[87]中得到了解释，同时还对修复它们的方法进行了仔细分析。
+27 Manzyuk等人[87]中仔细解释了这一点。
+28 trie数据结构是由Edward Fredkin在60年代初发明的。
+29 with-predicate-counts为谓词打印的名称并不以问号结尾；例如，为谓词number? 打印的名称只是number。其原因不详，欢迎好奇的人在代码中找到它。
+30 过程is-generic-handler-applicable? 抽取了我们之前在第98页get-handler中使用predicates- match? 进行的处理程序检查。这给我们提供了一个钩子，以便于以后的阐述。
+31 在诸如Haskell和Smalltalk这样的语言中，处理多个参数的方法是对第一个参数进行分派，产生一个对象，然后对第二个参数进行分派，等等。
+32 make-property过程使用一个叫做 guarantee 的辅助工具来进行参数检查。guarantee的第一个参数是一个谓词（最好是一个注册的谓词），第二个参数是一个要测试的对象。可能还有第三个参数，用于识别调用者。如果对象不满足谓词，guarantee发出错误信号。过程 guarante-list-of 的工作原理类似，只是它要求对象是一个满足谓词的元素的列表。
+我们在本文的前面使用了assert。assert对于提出必须为真的断言来说更方便，而 guarantee 对于参数类型检查这种更有限的情况来说更合适。
+
+

@@ -1,0 +1,1241 @@
+ 5 评价 攻克问题的最好方法之一是编造一种特定领域的语言，用这种语言可以很容易地表达解决方案。如果你编造的语言足够强大，许多与你所攻击的问题相似的问题将在你的语言中得到容易表达的解决方案。如果你从一个灵活的机制开始，这种策略就特别有效。我们在第二章、第三章和第四章中，在有限的背景下探讨了这个想法。在这里，我们将全面地探讨这个想法。
+当我们编造一种语言时，我们必须赋予它意义。如果我们想让语言的表达式来描述计算过程，我们就必须建立一种机制，当给定语言中的表达式时，它可以演化出所需的过程。解释器正是这样一种机制。我们将从类似于SICP[1]第4章中所描述的应用性顺序Scheap eval/apply解释器的可扩展版本开始探索这一创造性领域。
+Scheme程序是严格的，要求在进入程序主体之前对每个参数进行评估。接下来，我们对解释器进行扩展，在过程的正式参数列表中加入声明。这些声明将允许过程将相应参数的评估推迟到实际需要其值的时候，从而提供懒惰的评估，无论是否对其值进行了记忆。这种声明机制也可以用于其他信息，如类型和单位。
+解释器的效率相当低，因为它必须分析要解释的表达式，以便知道在每一步该做什么。每次解释器遇到相同的表达式时都要重复这种努力。所以我们接下来把解释分成两个阶段，分析和执行。分析阶段检查表达式并编译一个执行程序，当调用该程序时将执行表达式的意图。执行过程的运行不需要访问它所编译的表达式。执行程序都有相同的形式，并构成一个组合器系统。
+我们接下来添加McCarthy的amb运算符，使我们能够进行非确定性的评价和搜索。值得注意的是，这不需要改变评价器的分析部分。唯一需要改变的是执行程序的格式，它被重新用连续传递的方式表达。使用连续传递风格表明向程序员暴露了底层的连续。
+暴露底层延续的过程call/cc是Scheme中的一个标准过程，事实证明，我们只需要call/cc就可以直接在Scheme中实现amb，所以我们最后展示如何做到这一点。
+
+5.1 通用的评价/应用解释器 我们的第一个解释器被构建为可扩展的。所有重要的部分都是通用程序，而且我们很注意避免不必要的承诺。让我们开始吧。
+解释器的本质是两个程序：eval和apply。程序eval将一个表达式和一个环境作为输入。表达式是一个在语法上粘在一起的子表达式的组合。环境为出现在表达式中的一些符号赋予了意义。还有一些符号的含义在 eval 的定义中是固定的。1 但是大多数表达式都被解释为操作符和操作数的组合。对操作符的评价应该产生一个程序，对操作数的评价应该产生参数。
+然后将过程和参数传递给应用。过程通常用正式参数来命名参数。
+过程apply在一个环境中评估过程的主体（使用eval），在这个环境中，过程的形式参数被绑定到参数上。这就是解释器的中心计算循环。
+我们刚才所描述的是传统的应用性顺序解释器计划。在我们的解释器中，我们将把未评价的操作数和它们的评价环境传递给应用，使之有可能实现各种评价策略，如正常顺序以及应用性顺序。
+我们要实现的语言是Lisp的变体2，这意味着代码被表达为列表结构。在Lisp中，所有的复合表达式都是列表，其中一些是以区分的关键字开始的。有区别的关键字的复合表达式被称为特殊形式。不属于特殊形式的复合表达式被解释为程序对参数的应用。我们将把每个表达式类型的实现组织成一组规则，但应用除外，因为它不属于特殊形式。通过每条规则，我们给出表达式类型的语法定义。这种策略几乎可以用来实现任何语言，尽管需要一个新的解析器。对于Lisp，阅读器将字符串输入转换为列表结构，这是该语言的抽象语法树（AST）的自然表示。对于其他语言，抽象语法树更为复杂，解析器也更为复杂。
+5.1.1 eval 我们将g:eval定义为一个有两个参数的通用程序。
+(定义g:评估
+(simple-generic-procedure 'eval 2 default-eval))
+评价的默认情况是一个应用程序（有时被描述为一个组合）。
+(定义 (default-eval expression environment)
+(cond ((application? expression)
+(g:apply (g:advance)
+(g:evaluation (operator expression))
+环境))
+(操作数表达)
+环境))
+(否则
+(错误 "未知表达式类型" 表达式))))
+在基于Lisp的语言中，代表一个应用程序的列表的运算符是列表的第一个元素，操作数是列表的其他元素。
+(define (application? exp) (pair? exp))
+(define (operator app) (car app))
+(define (operands app) (cdr app))
+注意上面的代码是如何遵循我们在第235页描述的模式的。我们既提出了对一个特定语法结构（应用）的解释，也提出了其语法的定义。
+正如我们在那里解释的那样，有必要将应用程序作为通用程序的默认情况来处理，因为在Lisp中没有特殊的关键字来识别应用程序--相反，它被识别为一个不以某个区分的关键字开始的列表。
+应用程序首先评估表达式的运算符部分，然后将该值与表达式的操作数和当前环境一起传递给g:apply。然而，在对运算符进行评估后，我们将该值传递给通用程序g:advance。g:advance的目的是继续进行已经被推迟的评估。我们在第5.2节之前不需要推迟求值，所以在那之前g:advance只是一个身份函数。3
+(定义g:advance
+(simple-generic-procedure 'g:advance 1 (lambda (x) x) ))
+这并不是定义apply的传统方式。通过传递未评价的操作数和应用程序的环境，我们留下了引入正常顺序评价和应用顺序评价的选项；我们还可以实现对形式参数的声明，或许还有其他一些选项。
+对于每个非应用表达类型，我们提供一个处理程序。
+自我评价的表达会自己返回。
+(define-generic-procedure-handler g:eval)
+(match-args自我评价？环境？)
+(lambda (expression environment) expression))
+在Lisp语言中，自评价表达式包括数字、布尔值和字符串。在Scheme中，number? 是一个相当复杂的谓词。满足number? 的对象包括任意大小的整数、有理分数、实数和复数。
+(定义(自我评价？exp)
+(或(数字?exp)
+(boolean? exp)
+(string? exp)))
+可能还有其他的自评价表达式，所以为了使这个选项真正灵活，我们可以把自评价定义为一个通用过程。但是在这里这不是必须的，因为我们可以为g:eval再做一个处理程序来定义我们可能想要添加的任何其他自评价表达式类型。
+在允许对语言的符号表达式进行操作的语言中需要引号。5 引号是一个保护子表达式不被评估的表达式。
+(define-generic-procedure-handler g:eval)
+(match-args引号？环境？)
+(lambda (expression environment)
+(text-of-quotation expression))
+在基于Lisp的语言中，引号表达式的列表结构表示是一个以关键字quote开始的列表。Lisp的阅读器（解析器）将任何以撇号字符开头的表达式（例如，'（a b c）'）扩展为引号表达式
+(这里（引用（a b c）））。
+(define (quoted? exp) (taged-list? exp 'quote))
+(define (text-of-quotation quot) (cadr quot))
+一个标记的列表只是一个以给定的唯一符号开始的列表。
+(定义 (tagged-list? e t) (and (pair? e) (eq?(car e) t))
+Scheme变量只是在环境中查找。在其他语言中，关于变量有更复杂的规则。例如，在C语言中，有lvalues和rvalues，它们的处理方式不同。
+(define-generic-procedure-handler g:eval)
+(match-args变量？环境？)
+查询变量值)
+在基于Lisp的语言中，变量由符号来表示。
+(定义(变量?exp)(符号?exp))
+过程lookup-variable-value在给定的环境中查找其参数。如果没有找到该变量的值，它就在底层Scheme中寻找一个值。7 如果没有找到值，就会发出一个未绑定变量错误的信号。
+二元条件表达式（if-then-else）有一个简单的处理器。如果表达式的谓语部分被评估为真值，则评估表达式的结果部分，否则评估表达式的替代部分。
+(define-generic-procedure-handler g:eval)
+(match-args if? environment? )
+(lambda (expression environment)
+(如果 (g:advance)
+(g:eval (if-predicate expression) environment))
+(g:eval (if-consequent expression) environment)
+(g:eval (if-alternative expression) environment))))
+我们必须在被评估的谓词上调用g:advance，因为我们需要知道这个值来做决定。请注意，if的求值器使用嵌入语言的if结构来做这个工作。if表达式的Lisp语法很简单。如果没有指定备选方案，那么带有假谓词的if表达式的值就是全局变量the-unspecified-value的值。
+(define (if? exp) (taged-list? exp 'if))
+(定义 (if-predicate exp) (cadr exp))
+(定义 (if-consequent exp) (caddr exp))
+(定义 (if-alternative exp)
+(if (not (null?(cdddr exp))
+(cadddr exp)
+'the-unspecified-value))
+(定义 (make-if pred conseq alternative)
+(list 'if pred conseq alternative))
+第一个真正有趣的特殊形式是匿名过程的规范，由一个lambda表达式来表示。lambda表达式是一种特殊形式，是过程的构造函数。
+对lambda表达式的评估从形式参数、主体和当前环境中构造一个过程。如果语言中的变量是词义范围的，那么环境必须由过程携带。在一个词法范围的语言中，λ表达式主体中的自由变量（那些不是形式参数的变量）被赋予来自词法上下文的含义
+(其中lambda表达式以文字形式出现)。
+(define-generic-procedure-handler g:eval)
+(match-args lambda? environment? )
+(lambda (expression environment)
+(make-compound-procedure
+(lambda-parameters expression)
+(lambda-body expression)
+环境）））。
+lambda表达式的语法是：。
+(define (lambda? exp) ( tagged-list? exp 'lambda))
+(定义 (lambda-parameters lambda-exp) (cadr lambda-exp))
+(定义 (lambda-body lambda-exp)
+(让((full-body (cddr lambda-exp)))
+(sequence->begin full-body)))
+(定义 (make-lambda parameters body)
+(cons 'lambda
+(cons parameters)
+(if (begin? body)
+(begin-actions body)
+(list body)))))
+请注意，lambda表达式的主体可能包含几个表达式。这些表达式将被依次评估，以允许进行诸如赋值等副作用的操作，或者诸如打印等I/O控制操作。这是由 sequence->begin 处理的，它创建了一个 begin 的特殊形式。
+(定义 (sequence->begin seq)
+(cond ((null? seq) seq)
+((null?(cdr seq))(car seq))
+(否则
+(make-begin
+(append-map (lambda (exp)
+(if (begin? exp)
+(begin-actions exp)
+(list exp)))
+seq)))))
+请注意，过程sequence->begin平坦了嵌套的begin形式，保留了执行的顺序。第242页定义和描述了begin形式的语法和评估。
+派生表达式类型 已经介绍的表达式类型足以方便地编写大多数程序，但有一些语法上的糖通常是不错的。这些可以通过将表达式转换为更简单的表达式的组合来实现。宏是概括这种转换的一种方法；但是我们选择不建立宏扩展器作为我们解释器的一部分。8 在这里，我们明确地展示了Lisp多臂条件如何变成if表达式的巢。
+(define-generic-procedure-handler g:eval)
+(match-args cond? environment?)
+(lambda (expression environment)
+(g:eval (cond->if expression)
+环境）））。
+过程cond->if是一个相当简单的数据操作。
+(定义 (cond->if cond-exp)
+(定义 (扩展条款)
+(cond ((null? clauses)
+(错误 "COND: 没有匹配的值")
+((else-clause?(汽车条款))
+(如果(null?(cdr clauses))
+(cond-claus-consequent (car clauses))
+(错误 "COND: ELSE not last" cond-exp))
+(否则
+(make-if (cond-claus-predicate (car clauses))
+(cond-claus-consequent (car clauses))
+(扩大 (cdr clauses))))))
+(扩大(cond-clauses cond-exp)))
+而这里是冷凝器特殊形式的语法。
+(define (cond? exp) (taged-list? exp 'cond))
+(定义(cond-clauses exp)(cdr exp))
+(定义 (cond-claus-predicate clause) (car clause))
+(定义 (cond-claus-consequent clause)
+(sequence->begin (cdr clause)))
+(定义 (else-clause? clause)
+(eq?(cond-claus-predicate clause) 'else))
+因为cond允许一个子句的结果有一个动作序列，这个定义也依赖于sequence->begin。
+可以用let表达式引入局部变量。这些是通过翻译成与显式lambda表达式的组合来实现的。
+(define-generic-procedure-handler g:eval)
+(match-args let? environment?)
+(lambda (expression environment)
+(g:eval (let->combination expression)
+环境）））。
+let的语法是。
+(define (let? exp) (taged-list? exp 'let))
+(定义 (let-bound-variables let-exp)
+(map car (cadr let-exp)))
+(定义 (let-bound-values let-exp)
+(map cadr (cadr let-exp)))
+(定义 (let-body let-exp)
+(sequence->begin (cddr let-exp)))
+(定义 (let->combination let-exp)
+(let ((names (let-bound-variables let-exp))
+(value (let-bound-values let-exp))
+(body (let-body let-exp)))
+(cons (make-lambda names body)
+值）））。
+效果 如果语言中存在有效果的操作，如赋值或打印，它们必须被排序，因为顺序是至关重要的。在Scheme中，我们用begin来表示这种操作的顺序。
+(define-generic-procedure-handler g:eval)
+(match-args begin?environment?)
+(lambda (expression environment)
+(评估-序列 (开始-行动表达)
+环境）））。
+(define (begin? exp) (taged-list? exp 'begin))
+(定义 (begin-actions begin-exp) (cdr begin-exp))
+(定义 (make-begin actions) (cons 'begin actions))
+真正的工作实际上是在序列评估中。
+(定义(评估-序列行动环境)
+(cond ((null? actions)
+(错误 "空序列")
+((null?(cdr actions))
+(g:evaluation (car actions) environment))
+(否则
+(g:evaluation (car actions) environment)
+(评估-序列 (cdr 行动)
+环境))))
+评估一个非空的表达式序列所返回的值是该序列中最后一个表达式的值。但是执行序列中的表达式所引起的效果是按照序列的顺序发生的。
+大多数效果是通过变量的分配来实现的。
+(事实上，输入/输出操作在硬件中通常是通过赋值到地址空间中的特定敏感位置来实现的）。在Scheme中，我们允许程序在赋值语句的词法环境中向变量赋值。
+(define-generic-procedure-handler g:eval)
+(match-args assignment? environment?)
+(lambda (expression environment)
+(set-variable-value!(assignment-variable expression)
+(g:eval (assignment-value expression)
+环境）。
+环境）））。
+赋值的语法是：。
+(define (assignment? exp) (taged-list? exp 'set!))
+(定义 (assignment-variable assn) (cadr assn))
+(定义 (assignment-value assn) (caddr assn))
+我们也允许定义，即用一个给定的值创建一个新的变量。定义在定义语句的最本地词汇环境框架中创建一个新的变量。
+(define-generic-procedure-handler g:eval)
+(match-args定义？环境？)
+(lambda (expression environment)
+(define-variable!(define-variable expression)
+(g:evaluation (definition-value expression)
+环境）。
+环境）。
+(定义-变量表达))
+定义的语法比赋值的语法更复杂，因为我们允许以多种方式定义一个程序：9
+(define (define? exp) (taged-list? exp 'define))
+(define (define-variable defn)
+(如果（变量？(cadr defn))
+ ; (DEFINE foo ...)
+(cadr defn)
+(caadr defn))
+ ; (DEFINE (foo ...) ...)
+(define (define-value defn))
+(如果（变量？(cadr defn))
+ ; (DEFINE foo ...)
+(caddr defn)
+(cons 'lambda ; (DEFINE (foo p..) b...)
+(cons (cdadr defn)
+ ; =(DEFINE foo
+(cddr defn)))))
+ ;（LAMBDA（p...）b...）)
+这就完成了定义语言语法的特殊形式的常规列表。当然，通用程序的实现可以很容易地创建新的特殊形式，允许语言的发展，使其更方便地表达基础语言中没有很好支持的计算思想。但是，具有许多不同语法结构的语言可能难以学习、记录和使用；这是一个典型的工程权衡（记得Alan Perlis在第159页的格言）。
+5.1.2 apply 传统的Scheme apply需要两个参数，即要应用的过程和要传递给该过程的已评估参数。这对Scheme来说已经足够了，因为Scheme是一种严格的应用性顺序语言，只有词性范围的变量。
+通过将apply的接口泛化为接受三个参数--要应用的程序、未评价的操作数和调用环境--我们使得包括需要对一些参数进行正常顺序评价的程序（例如，按需调用）或对参数（如类型和单位）进行声明的程序成为可能。我们将在第5.2节做一些类似的扩展。环境参数也使得适应非逻辑范围的变量成为可能，但我们不会这样做；这通常是个坏主意。我们将从Scheme应用性顺序开始，用通用的钩子进行扩展。
+我们的应用是一个有三个参数的通用程序。
+(定义g:应用
+(simple-generic-procedure 'apply 3 default-apply))
+(定义 (default-apply procedure operands calling- environment)
+(错误 "未知程序类型" 程序)
+我们将需要各种程序的处理程序。有些过程，比如算术加法（通常用+运算符命名），是严格的：它们需要在计算一个值之前评估所有的参数。在Scheme中，所有过程都是严格的，包括原始过程（在系统或硬件中实现，低于语言的水平）。所以我们需要一个通用的处理程序来处理严格的基元。
+(define-generic-procedure-handler g:apply
+(match-args strict-primitive-procedure? operands? environment?)
+(lambda (procedure operands calling-environment)
+(应用原始程序的程序
+(eval-operands操作数调用-环境))))
+原始过程的应用在这个层次上是 "魔术"。操作数评估器，如第238页的if，必须在评估结果上调用g:advance，以确保有一个值。
+(定义 (eval-operands operands call-environment)
+(map (lambda (operand)
+(g:advanced (g:eval operand calling-environment))
+操作数））。
+注意，操作数的评估顺序由map的行为决定。
+通过评估lambda表达式构建的程序不是原始的。在这里我们可以把过程拆开。我们可以抓取形式参数规格，也就是形式参数的名称。我们还可以提取过程的主体，我们将把它和一个包括形式参数绑定的环境一起传递给eval。对于词法范围来说，这个扩展的环境是通过对构建过程的lambda表达式的评估，建立在与过程一起打包的环境上。
+(define-generic-procedure-handler g:apply
+(match-args strict-compound-procedure? operands? environment?)
+(lambda (procedure operands calling-environment)
+(如果 (not (n:= (length (process-parameters procedure))
+(操作数长度))
+(错误 "提供的操作数错误")
+(g:evaluation (procedure-body procedure)
+(扩展-环境
+(程序-参数程序)
+(eval-operands operands 调用-环境)
+(程序-环境 procedure)))))
+这里的strict-compound-procedure? 是指所有没有声明任何参数的复合过程。10 驱动循环 为了与这个评估器交互，我们需要一个读-评估-打印循环。
+(定义(复制))
+(check-repl-initialized)
+(让((输入(g:读)))
+(write-line (g:evaluation input the-global-environment))
+(复制))
+这里g:read在终端发出一个提示，eval>。它接受字符并对其进行解析，将得到的字符转换为一个s-表达式。然后用g:eval对global-environment进行评估，并将结果写回给终端。该程序rep调用自己的尾部递归。为了使其发挥作用，全局环境必须被初始化。
+(定义the-global-environment 'not-initialized)
+(定义 (initialize-repl!)
+(set! the-global-environment (make-global-environment))
+'完成)
+(定义 (check-repl-initialized)
+(if (eq? the-global-environment 'not-initialized)
+(错误 "解释器没有被初始化。先运行（init）。"）)
+这样就完成了初级评价器。
+练习5.1：非绑定变量的处理 在Lisps中，包括Scheme，试图评价一个非绑定符号是一个非绑定变量错误。然而，在一些代数过程中，允许非绑定符号成为一个自我评价的对象往往是明智的。例如，如果我们像在第三章中那样，通用地扩展算术以建立具有符号值的代数表达式，有时允许以下情况是很有用的。
+(+ (* 2 3) (* 4 5))
+26
+(+ (* a 3) (* 4 5))
+(+ (* a 3) 20)
+我们的通用算术支持符号扩展：当运算符*和+的参数不能被还原为数字时，运算符被扩展为建立表达式。但它不允许将非绑定变量作为字面数字使用。这里的符号a是未绑定的。我们可能希望它是自我评价的。
+a.对eval做一个通用扩展，以允许这种行为。为了使其适用于数字基元（+, *, - , /），有必要对其行为进行扩展。请注意，这些运算符应该在底层Scheme环境中被改变。如同第三章，通用操作符机制可以被赋予在底层Scheme系统中工作的处理程序。
+b.同时增强应用，允许在运算符位置的非绑定符号被解释为字面函数，只由它们的名字来知道：（+（f 3）（* 4 5））==>（+（f 3） 20）。
+这些对eval和apply的扩展通常是危险的，因为它们隐藏了真正的非绑定变量错误。让它们以用户可设置的变量的值为条件：允许自我评价的符号。
+练习5.2：n-ary程序 第246页的脚注10指出了一个讨厌的假设，我们把它放到了g:apply处理程序中，这意味着对这个评估器的未来扩展有限制。在Scheme中，如果一个过程的过程-参数不是一个列表，而是一个符号，那么这个符号就被当作一个参数，将被绑定到参数列表中。11 在这个练习中，我们改变了解释器，接受单个符号作为形式参数列表，这样一个过程就可以被定义为接受不确定数量的参数。在我们的解释器中，过程lambda-parameters（第239页）很乐意返回一个单一的符号，并且在所有被调用的地方，结果都被传递给make-compound-procedure。该值由过程-参数检索，在g:apply中使用。这样看来，解释器中唯一需要改变的部分是g:apply。
+改变g:apply以与新的复合程序一起工作。
+这可以通过重写g:apply（第246页）现有的strict-compound- procedure? 处理程序来实现，但是为过程参数是一个列表的情况专门设计这个处理程序，并为过程参数是一个符号的情况添加一个新的处理程序，会更容易和更清晰。
+练习5.3:程序的矢量 在数学文本中，一个常见的滥用符号是将一个函数的元组与一个返回值的元组相提并论。例如，如果(cos 0.6)产生0.8253356149096783，如果(sin 0.6)产生0.5646424733950354，那么我们期望((vector cos sin)
+ 0.6)
+ 以产生#（0.8253356149096783 0.5646424733950354）。
+尽管我们有一个练习3.2来扩展算术到向量，但这些扩展并没有修改底层的语言评估器。这种行为需要对g:apply进行扩展，以便它能把向量函数作为一种函数来处理。做这个扩展，演示一下，并说明它能与更多的传统代码互操作。
+练习 5.4: 轮到你了 发明一个有趣的结构，它可以很容易地使用通用的eval/apply来实现，但如果没有这种通用的支持，就会相当痛苦。
+练习5.5：与底层系统的交互操作 正如第238页所指出的，评估表达式eval>（map (lambda (x) (* x x)) '(1 2 3))
+如果这个表达式中的map指的是底层Scheme系统中的map过程，那么我们的解释器中的map就不会工作。
+然而，如果我们为我们的解释器重新定义map，它确实可以工作： eval> (define (map f l)
+(如果 (null? l)
+'()
+(cons (f (car l)) (map f (cdr l))))))
+map eval> (map (lambda (x) (* x x)) '（1 2 3）)
+(1 4 9)
+为什么使用接受程序性论据的底层程序，如map，不能发挥作用？解释一下。勾勒出一个解决这个问题的策略，并实现你的解决方案。注意：这是很微妙的问题，所以不要花无限的时间去试图使它完美地工作。
+练习5.6：不同的引号 有一些有趣的语言具有非常不同的评价和引号规则。例如，在MDL中（见维基百科[91]），一个符号被认为是自评的，而要查询的变量则用前缀字符来区分。
+另外，在MDL中，一个组合是一个特殊的形式，但有一个隐含的关键词。我们的评估器可以很容易地被修改，以解释类似MDL的语法，只需改变语法定义。试试吧!练习5.7: Infix符号 与Lisp不同，大多数计算机语言使用infix符号。如果我们想在Scheme中加入infix表达式，我们可以这样写。
+(infix "fact := lambda n: if n == 0 then 1 else n*fact(n-1)" )
+(事实720 6)
+;现在定义了Lisp程序
+(infix120 "fact(5)")
+;而且可以用infix符号来表示。
+这完全是一个语法上的小问题（哈！）。然而，要使它发挥作用是一个有趣的项目。你不需要改变解释器。工作是解析字符串，将其编译成相应的Lisp表达式，就像cond- >if的工作方式一样。Lisp程序员已经做了很多次了，但是用Lisp编程的人似乎喜欢Lisp原生的波兰语前缀符号！12 哦，好吧......
+5.2 带有非严格参数的过程 在这一节中，我们将研究在过程的形式参数中添加声明，以允许延迟计算相应的操作数。
+在Scheme中，过程是严格的。严格的过程要求在过程的主体被评估之前，评估调用表达式的所有操作数，并将结果参数绑定到形式参数中。但是对于if表达式来说，必须对谓词部分进行评估以确定是评估结果部分还是替代部分；它们不会同时被评估。这就是为什么if必须是一个特殊形式，而不是一个过程。一个非严格的过程是一个可以推迟评估某些操作数的过程。我们怎样才能使程序员能够根据需要定义非严格的过程，而不是仅仅使用语言定义中指定的一些特殊形式，比如if？例如，假设我们想做一个除非程序，它的工作原理与特殊形式的if相似，即它不评估不需要的替代物。13 使用unless，我们可以这样写。
+(定义 (fib n)
+(除非 (< n 2)
+(+ (fib (- n 1)) (fib (- n 2))
+n))
+为了使斐波那契函数的这个定义正常工作，除非表达式的第二个操作数在n<2时不应该被评估，而第三个操作数在n≥2时不应该被评估。但是除非表达式的第一个操作数必须始终被评估以确定选择。
+我们需要一种方法来确定除非的哪些操作数需要评估，哪些需要延缓。为了做到这一点，我们引入了一种声明，并写道。
+(定义(除非条件(通常是懒)(例外是懒))
+(如果条件例外通常))
+在这里，我们用特殊形式的if来定义程序除非，但我们声明第二个和第三个参数是懒惰的。14 第一个参数在默认情况下是严格的。
+我们可以有许多种关于形式参数的声明，描述如何处理操作数和参数。一个参数可以被声明为懒惰的和备忘的，以实现按需调用，就像Haskell等语言中所有过程的参数一样；一个参数可以被声明为要求其参数满足给定的谓词，这些谓词可以是类型和单位；等等。
+实现广义形式化参数 为了实现广义形式化参数，我们需要一个特殊的处理新情况的应用程序。这可以通过给g:apply添加一个处理程序来实现，类似于前面的严格复合过程的处理程序（见第246页）。
+(define-generic-procedure-handler g:apply
+(match-args general-compound-procedure? operands? environment?)
+(lambda (procedure operands calling-environment)
+(如果 (not (n:= (length (process-parameters procedure))
+(操作数长度))
+(错误 "提供的操作数错误")
+(让((params (procedure-parameters procedure) ))
+(正文(程序-正文程序)))
+(let ((names (map procedure-parameter-name params))
+(论点
+(map (lambda (param operand)
+(g:handle-operand param operand calling-environment))
+params 操作数））)
+(g:evaluation body
+(扩展-环境名称参数
+(程序-环境 procedure)))))))
+这与严格的应用程序有两点不同：首先，我们必须提取参数的名称，因为它们可能被包裹在声明中；其次，我们必须根据声明的情况，特别处理操作数。这是由通用程序procedure-parameter-name和g:handle-operand完成的。
+过程procedure-parameter-name允许我们为一个形式参数添加声明，并且仍然能够检索到它的名字。默认的处理程序是身份函数，所以未装饰的形式参数的名称只是它自己。
+(define procedure-parameter-name
+(simple-generic-procedure 'parameter-name 1 (lambda (x)
+x)))
+过程g:handle-operand允许我们根据相应形式参数的声明来选择如何处理一个操作数。
+(定义g:handle-operand
+(simple-generic-procedure 'g:handle-operand 3)
+(lambda (parameter operand environment)
+(g:advance (g:evaluation operand environment))))))
+处理没有声明的操作数的默认方法是对操作数进行求值，就像之前第245页的eval-operands所做的那样。
+我们需要一种语法来允许我们用声明来装饰一个形式参数。这里我们选择使用一个以形参名称开头的列表。
+(define-generic-procedure-handler(match-args pair?)
+汽车)
+procedure-parameter-name 我们将从实现两种声明开始。第一种是lazy，这意味着操作数只有在需要它的值时才被评估，例如作为if表达式的谓语。第二种是lazy memo，它和lazy一样，只是在操作数第一次被评估时，值被记住了，这样以后的使用就不需要重新评估了。
+如果一个参数被指定为懒惰（或懒惰备忘），那么操作数的评估必须被推迟。推迟的表达式必须与环境打包，当需要它的值时，它将被用来给该表达式中的自由变量赋值。15
+(define-generic-procedure-handler g:handle-operand)
+(match-args lazy? operand? environment?)
+(lambda (parameter operand environment)
+(推迟操作数的环境)))
+(define-generic-procedure-handler g:handle-operand)
+(match-args lazy-memo? operand? environment?)
+(lambda (parameter operand environment)
+(postpon-memo operand environment)))
+当然，我们必须扩展g:advance ，到目前为止，它只有一个默认的处理程序（见第236页），以进行推迟的评估。
+请注意，g:advance的结果本身可能是一个推迟，所以我们可能必须提前。
+(define-generic-procedure-handler g:advance)
+(match-args postponed?)
+(lambda (object)
+(g:advance (g:eval (postponed-expression object)
+(postponed-environment object)))))
+如果表达式被推迟，目的是对结果进行备忘，那么结果将被提前备忘保存！。
+(define-generic-procedure-handler g:advance)
+(match-args postponed-memo?)
+(lambda (object)
+(让((值
+(g:提前
+(g:eval (postponed-expression object)
+(postponed-environment object)))))
+(advance-memo! object value)
+值）））。
+记忆化的值不需要再被评估。advance-memo！过程改变了被推迟的对象的类型，以满足谓词advanced-memo? 并保存了该值，使其可以被advanced-value :16访问。
+(define-generic-procedure-handler(match-args advanced-memo?)
+advanced-value)
+g:advance 示例。懒惰对和列表 带有懒惰参数的程序给了我们新的力量。例如，我们可以定义一个构造函数 kons，以及选择器 kar 和 kdr ，这样我们就可以在不评估其内容的情况下进行配对。17 在这里，我们将kons实现为一个过程，它通过需要来调用它的参数（memoized lazy）。它为kar和kdr产生了一个消息接受器the- pair，它还在the-pair上贴了一个 "便条"，以确定它是kons的结果。
+(定义 (kons (x lazy memo) (y lazy memo))
+(定义 (the-pair m)
+(cond ((eq? m 'kar) x)
+((eq? m 'kdr) y)
+(else (error "Unknown message - kons" m x y)))))
+(hash-table-set! kons-registrations the-pair #t)
+(the-pair)
+(定义 (kar x)
+(x 'kar))
+(定义 (kdr x)
+(x 'kdr))
+我们需要贴纸的原因是为了能够识别一个孔子对。
+(定义 (kons? object)
+(hash-table-exists? kons-registrations object))
+使用这种懒人对机制，我们可以很容易地实现流类型的处理。流就像列表一样，但它们是由消费它们的进程根据需要建立的。18 因此，一个无限长的流可以被递增地处理，在任何时候都只有有限的部分是实际的。
+有些流是有限的，所以为空流选择一种表示方法是很有用的。让我们把它变成与空列表相同的形式。
+(定义the-empty-stream '())
+(define (empty-stream? thing)
+(null? thing))
+我们可以添加流。
+(定义 (add-streams s1 s2)
+(cond ((empty-stream? s1) s2)
+((empty-stream? s2) s1)
+(否则
+(Kons (+ (Kar s1) (Kar s2))
+(add-streams (kdr s1) (kdr s2)))))))
+我们可以找到一个流的第n个元素。
+(定义 (ref-stream stream n)
+(如果 (= n 0)
+(卡尔流)
+(ref-stream (kdr stream) (- n 1)))))
+鉴于这些，我们可以创建一个（可能是无限的）斐波那契数字流，其中有两个初始条目，其余的数字流是通过将数字流加入其kdr而形成。
+(定义fibs
+(kons 0 (kons 1 (add-streams (kdr fibs) fibs))))
+然后我们可以看一下几个斐波那契数字
+(ref-stream fibs 10)
+55
+(ref-stream fibs 100)
+354224848179261915075 通常的斐波那契双递归程序是指数级的，所以我们不能指望用这种方法得到这个序列中的第100个条目；但孔子对被备忘录化的事实将这一问题减少到线性问题。请注意，在序列的这一点上，两个连续的斐波那契数的比率已经完全精确地收敛到了黄金比率。
+(不确切的
+(/ (ref-stream fibs 100)
+(ref-stream fibs 99))
+1.618033988749895 练习5.8：微分方程的积分 不幸的是，使用孔子本身并不能解决所有的流问题。例如，SICP[1]第4.2.3节（第411页）中所提到的困难并不会自动消散。假设我们想在给定的一些初始条件下对一个微分方程进行积分。我们做以下定义。
+(定义 (map-stream proc (items lazy memo))
+(if (empty-stream? items)
+项目
+(kons (proc (kar items))
+(map-stream proc (kdr items))))))
+(定义(尺度流项目因素)
+(map-stream (lambda (x) (* x factor))
+项目))
+(定义 (integral integrand initial-value dt)
+(定义int
+(kons initial-value
+(add-streams (scale-stream integrand dt)
+int)))
+int)
+(定义 (解决f y0 dt)
+(定义y (积分dy y0 dt))
+(定义dy (map-stream f y))
+y)
+我们试图通过积分x！(t)=x(t)找到e的近似值
+初始条件x(0)=1。我们知道e=x(1)，所以我们写道。
+(ref-stream (solve (lambda (x) x) 1 0.001) 1000)
+;未绑定的变量：dy 我们得到了一个错误--唉!然而，现在我们有工具来解决这个问题。要改变什么才能使其按预期工作？修正这个程序以得到以下行为。
+(ref-stream (solve (lambda (x) x) 1 0.001) 1000)
+2.716923932235896
+(是的，我们知道这是对e的一个糟糕的近似值，但它说明了一个编程点，而不是一个数字分析点！)
+练习5.9：为什么不是kons？kons的特殊形式等同于一个参数都是懒惰的和备忘的cons。如果参数没有被备忘，上面的计算(ref-stream fibs 100)将花费很长的时间。
+a.不做备忘录有什么好处吗？b. 为什么我们不能把Kons简单地定义为
+(定义 (kons (a lazy memo) (d lazy memo))
+(cons a d))
+c. 更为普遍的是，Lisp社区避免将cons改为kons，正如Friedman和Wise所建议的那样（见254页的脚注17）。使用cons而不是kons，可以避免哪些潜在的严重问题？假设我们不关心性能方面的小常数因素。
+练习5.10：限制性参数 一个好主意是在形式参数的声明中建立限制。我们可能想要求一个参数的任意谓词为真，类似于我们在4.3.2节中对模式变量的限制。例如，我们可能想让一个过程接受三个参数：第一个是任何整数，但是第二个是质数，第三个是不受限制的。这可以用符号表示。
+(定义 (my-proc (n integer?) (p prime?) g)
+...)
+不幸的是，这种临时性的设计并不能与其他的声明（如懒惰和备忘录）很好地配合，除非我们立法规定声明的顺序或使它们成为保留标识符。假设为了方便起见，我们将 lazy 和 memo 声明为特殊的关键字，并要求其他的声明与一个关键字一起宣布，例如对一个谓词的 restrict-to。
+(定义 (my-proc (n restrict-to integer?)
+(p限制为素数？懒)
+g)
+...)
+a.设计一个适当的语法。确保它是可扩展的，可以根据需要添加新的声明类型。用BNF表达你的语法，并改变你的解释器的语法程序来实现它。
+b.实现谓词限制。如果一个限制在运行时被违反，程序应该报告一个错误。你可能会发现这里的保证很有用。
+练习5.11：n-ary程序，再次！ a. 在第248页的练习5.2中，我们修改了g:apply处理程序，允许程序的形式参数是一个单一的符号，它被绑定到一个参数的列表中。不幸的是，这种指定休息参数的方式对于一个形式参数可以用声明来装饰的系统来说是不自然的。然而，我们可以发明一种装饰语法，允许我们定义带有可选参数和休息参数的程序。
+例如，如果我们允许形式参数列表中的最后一个形式参数用rest这个词来装饰，它应该被绑定到未匹配的参数上。这个rest的声明应该可以和其他关于该参数的声明一起使用。所以我们应该能够创建这样的程序。
+(lambda (x
+(y restrict-to integer? lazy)
+(z rest restrict-to list-of-integers?))
+...)
+其中 list-of-integers? 是一个对整数列表为真的谓词。其余的声明应该能够与其他声明一起使用，如lazy和restrict-to。
+b. 允许一个过程有可选的参数也可能是有用的，可能会指定默认值。例如，一个数字过程可以允许用户指定一个近似的公差，但是如果用户不提供公差，则指定一个默认值。
+(lambda (x (epsilon optional flo:ulp-of-one))
+...)
+这里flo:ulp-of-one是一个全局定义的符号，它指定了最小的2次方，当与1.0相加时产生的值不等于1.0。在C库中，它被称为DBL EPSILON。
+(对于那些少数关心的人来说，在IEEE双精度浮点中，flo:ulp-of-one的值是2.220446049250313e-16)。
+让可选的声明也能发挥作用!要确保你的扩展可以与所有其他有意义的声明混合和匹配。
+5.3 编译成执行程序 我们一直在使用的评估器是非常灵活和可扩展的，但是它很笨：我们的程序运行得相当慢。罪魁祸首之一是，评估器反复查看语法
+(无论多么简单）的程序。我们在第4章中避免了这个问题，在第4.3节中将每个匹配器模式转化为所有具有相同形式的匹配器程序的组合--组合器语言。在解释一种语言时，我们可以通过类似的方式将其编译为执行程序的组合，从而避免重新审查语法结构。所以在深入研究评价之前，我们先来做这个过渡。
+关键的想法是将相对于环境的表达式的评估问题分成两个阶段。在第一阶段，表达式被分析并转换为执行程序。在第二阶段，该执行程序被应用到环境中，产生预期的评价结果。我们直接实现这个想法，作为两个阶段的组合。
+(define (x:evaluation expression environment)
+((分析表达)环境))
+对表达式的分析和转换被称为编译，而它所做的工作据说是在编译时完成的。编译器提取了不依赖于表达式中自由变量值的那部分行为。这主要是句法分析，但它也是一些可由句法规则实现的优化的场所。由此产生的执行程序取决于符号与环境中指定的值的映射；它所做的工作被说成是在运行时完成的。
+表达式的分析 由于我们希望能够根据需要扩展语言的语法，所以我们将分析作为一个通用程序来实现，默认情况下是将运算符应用于操作数。这必须是Lisp/Scheme的默认值，因为没有区分应用的句法关键字。19
+(define x:analyze
+(simple-generic-procedure 'x:analyze 1 default-analyze))
+x:analyze的惯例是，它接受一个表达式作为参数，并返回一个执行程序，该执行程序接受一个参数，即环境。
+该程序分析抓住了一个常见的使用模式。
+(定义 (分析表达)
+(make-executor (x:analyze expression)))
+用过程make-executor来包装执行过程的目的是为了帮助调试。所产生的执行器也是一个过程，其参数和返回值与它所包装的执行过程相同。这个包装器的一个有用的方面是它保持了一个 "执行跟踪"，在确定程序是如何到达故障点的时候是很有帮助的。
+正如我们所说，默认的分析是一种应用。
+(定义 (default-analyze expression)
+(cond ((application? expression)
+(分析-应用表达))
+(else (error "Unknown expression type" expression)))))
+(定义 (分析-应用表达)
+(让((operator-exec (analyze (operator expression)))
+(operand-execs (map analyze (operands expression)))))
+(lambda (environment)
+(x:apply (x:advance (operator-exec environment))
+operand-execs environment))))
+注意这里的分工：运算符和操作数从表达式中提取出来，并进行分析，构成执行程序operator-exec和operand-execs。这可能需要大量的分析。然后，应用程序的执行程序是一个过程（由lambda表达式创建）。
+该程序需要一个环境并进行应用。过程x:apply（在第265页）类似于解释器中的g:apply；但是x:apply对操作数采取执行程序，而不是g:apply使用的操作数表达式。类似于g:advance的程序x:advance也是出于同样的原因被引入。评估器的每一部分都可以以这种方式进行转换。
+自评价表达式（如数字、布尔值或字符串）的转换是微不足道的。唯一困难的部分是表达式的实际语法，这是由Scheme解析器处理的。程序的文本在到达评估器之前就已经被解析成标记和s-表达式了，所以我们在这里不需要关心这些复杂的问题。
+(define (analyze-self-evaluating expression)
+(lambda (environment) expression))
+(define-generic-procedure-handler(match-args self-evaluating?)
+分析-自我评价)
+x:analyze Quotation很容易，同样是因为困难的部分在解析器中。20
+(定义 (分析-引用表达)
+(让((qval (text-of-quotation expression)))
+(lambda (environment) qval) ))
+(define-generic-procedure-handler(match-args quoted?)
+分析-引用)
+x:分析变量也很容易。一旦我们确定了变量，所有的工作都在执行程序中。
+(定义 (分析-变量表达)
+(lambda (environment)
+(lookup-variable-value expression environment))
+(define-generic-procedure-handler(match-args variable?)
+分析 - 变量)
+x:analyze 程序定义在Lisp/Scheme中用lambda表达式表示，是一个强大分工的例子。在建立执行程序之前，分析器（编译器）会解析lambda表达式，提取形式上的参数规范，并编译表达式的主体。因此，lambda表达式的执行程序，以及最终执行主体的代码，不需要做这些工作。
+(define (analyze-lambda expression)
+(让((vars (lambda-parameters expression))
+(body-exec (analyze (lambda-body expression)))))
+(lambda (environment)
+(make-compound-procedure vars body-exec environment)))))
+(define-generic-procedure-handler(match-args lambda?)
+分析-lambda)
+x:analyze 特殊形式的if是另一个非常明显的例子，说明将分析与执行分开的好处。if表达式的三个部分在编译时被分析，允许执行过程不做更多的工作，只是从谓词中提取布尔值来决定是做结果还是做选择。对子表达式的分析在运行时（使用执行程序时）没有必要进行。
+(define (analyze-if expression)
+(让((predicate-exec
+(分析(if-predicate expression)))
+(结果-执行
+(分析(if-consequent expression)))
+(alternative-exec
+(分析 (if-alternative expression)))))
+(lambda (environment)
+(如果 (x:advance (predicate-exec environment))
+(结果-执行环境)
+(alternative-exec environment)))))
+(define-generic-procedure-handler(match-args if?)
+分析-如果)
+x:analyze 要被评估的表达式序列是分析和执行分离的一个特别好的例子。我们没有充分的理由在每次进入过程的主体时重新编译表达式序列；这项工作可以在编译时一次性完成。
+analyze-begin程序首先分析begin表达式的每个子表达式，产生一个执行程序的列表
+(保留了begin表达式中表达式的顺序)。
+然后，这些执行程序被用reduce-right和一个成对组合器粘在一起，该组合器接收两个执行程序并产生一个依次执行两个给定执行程序的执行程序。
+(define (analyze-begin expression)
+(reduce-right (lambda (exec1 exec2)
+(lambda (environment)
+(exec1环境)
+(exec2环境))
+#f
+(地图分析
+(让((exps
+(begin-actions expression)))
+(如果 (null? exps)
+(错误 "空序列")
+exps))))
+(define-generic-procedure-handler(match-args begin?)
+分析-开始)
+x:analyze 在没有编译器优化的情况下，对赋值的处理是没有问题的。
+(定义 (分析-分配表达)
+(让((var
+(assignment-variable expression))
+(value-exec
+(分析(分配值expression)))))
+(lambda (environment)
+(set-variable-value!'ok))
+变化
+(价值-执行环境)
+环境）。
+(define-generic-procedure-handler(match-args assignment?)
+分析-分配)
+x:analyze 然而，如果有编译器优化要做，赋值会带来严重的问题。事实上，赋值将时间引入了程序：有些事情发生在赋值之前，有些发生在赋值之后，而且赋值可以改变引用被改变的变量的事件。
+因此，举例来说，如果普通的子表达式引用了一个可以被赋值的变量，那么这些子表达式可能并不真正具有相同的价值!定义不是问题，除非我们把它们（和错误地使用它们）当作赋值，可能会干扰编译器的优化。
+(定义 (分析-定义表达)
+(让((var
+(定义-变量表达))
+(value-exec
+(分析 (定义-价值表达)))))
+(lambda (environment)
+(define-variable! var)
+(价值-执行环境)
+环境）。
+var)))
+(define-generic-procedure-handler(match-args definition?)
+分析-定义)
+x:analyze 通过表达式的转换来实现的特殊形式，如 cond 和 let ，在这个系统中非常容易；我们只需编译转换后的表达式。事实上，这正是一个非常通用的宏工具可以被连接到的地方。
+(define-generic-procedure-handler(match-args cond?)
+x:分析
+(compose analyze cond->if))
+(define-generic-procedure-handler x:analyze
+(match-args let?)
+(compose analyze let->combination))
+程序的应用 一个应用程序的执行程序调用操作数的执行程序，以获得要应用的复合程序。(见第260页的分析-应用。）操作数也被转换为执行程序。
+程序x:apply类似于基本评价器中的g:apply（第245页）。
+(定义x:应用
+(simple-generic-procedure 'x:apply 3 default-apply))
+(定义 (default-apply procedure operand-execs environment)
+(错误 "未知程序类型" 程序)
+注意，这里的default-apply与g:apply使用的相同，除了两个未使用的参数的名字。
+像以前一样，我们需要处理程序来应用各种程序，并带有特定种类的参数。严格的原始程序的应用处理程序必须强制输入参数，然后执行原始程序。
+(define-generic-procedure-handler x:apply
+(match-args strict-primitive-procedure? executors? environment?)
+(lambda (procedure operand-execs environment)
+(应用原始程序的程序
+(map (lambda (operand-exec)
+(x:advance (operand-exec environment)))
+operand-execs))))
+一般程序的应用处理程序与前面显示的基本评估器只有一点不同。不同的是，我们有执行程序而不是操作数表达式来处理。
+(define-generic-procedure-handler x:apply
+(match-args复合程序？执行者？环境？)
+(lambda (procedure operand-execs calling-environment)
+(如果 (not (n:= (length (process-parameters procedure))
+(length operand-execs))
+(错误 "提供的操作数错误")
+(让((params (procedure-parameters procedure) ))
+(body-exec (procedure-body procedure)))
+(let ((names (map procedure-parameter-name params))
+(论点
+(map (lambda (param operand-exec)
+(x:handle-operand param operand-exec calling-environment))
+params operand-execs))
+(body-exec (extend-environment names arguments)
+(程序-环境 procedure)))))))
+这个复合过程的应用处理程序需要能够处理复合过程中可能存在的各种形式的参数。这可以通过我们通常的方式实现，即让x:handle-operand成为一个通用过程。默认情况下，在进入复合过程的主体之前对操作数进行评估，是立即执行操作数执行过程以获得一个值。然而，懒惰参数和记忆化的懒惰参数需要能够适当地推迟执行时间。
+(定义x:handle-operand
+(simple-generic-procedure 'x:handle-operand 3
+(lambda (参数operand-exec环境)
+(operand-exec environment))))
+(define-generic-procedure-handler x:handle-operand)
+(match-args lazy? executor? environment?)
+(lambda (参数operand-exec环境)
+(postpone operand-exec environment))
+(define-generic-procedure-handler x:handle-operand)
+(match-args lazy-memo? executor? environment?)
+(lambda (参数operand-exec环境)
+(postpone-memo operand-exec environment))
+推迟一个操作数的执行程序与推迟一个操作数的表达式是一样的。但是通用程序x:advance处理被推迟的操作数执行程序的处理程序与g:advance的处理程序不同：被推迟的执行程序必须在被推迟的环境中调用，而不是相对于该环境进行评估（与第253页的g:advance比较）。
+(define-generic-procedure-handler x:advance)
+(match-args postponed?)
+(lambda (object)
+(x:advance ((postponed-expression object)
+(postponed-environment object)))))
+(define-generic-procedure-handler x:advance)
+(match-args postponed-memo?)
+(lambda (object)
+(让((值
+(x:advance ((postponed-expression object)
+(postponed-environment object)))))
+(advance-memo! object value)
+值）））。
+在这个x:apply中对操作数的处理不是很巧妙。事实上，它对执行过程中的正式参数列表进行了大量的 "解析"，所以我们确实没有完全编译这个复合过程。改善这种编译的一个步骤是将严格的复合过程的处理程序分离出来，就像我们前面做的那样。在练习5.16中，你要做的就是解决这个棘手的问题。
+练习 5.12: 实现 n-ary 程序 在练习 5.2 和 5.11 中我们注意到，拥有可以接受无限多参数的程序通常是很有价值的。Scheme中的加法和乘法过程就是这种过程的例子。
+为了在Scheme中定义这样一个过程，我们将λ表达式的形式参数指定为一个符号，而不是一个列表。这个符号被绑定到所提供的参数的列表上。例如，要制作一个接受多个参数并返回参数的平方的列表的过程，我们可以这样写。
+(lambda x (map square x))
+或
+(定义 (ss . x) (map square x))
+然后我们可以说
+(SS 1 2 3 4) ==> (1 4 9 16)
+修改分析解释器以允许这种结构。
+提示：你不需要改变语法定义中涉及define或lambda的代码!这完全是分析器中的一个变化。
+证明你的修改允许这种程序，并且不会引起其他麻烦。
+练习 5.13: 简化调试 这个编译器的一个问题是，执行程序都是匿名的lambda表达式。所以没有什么信息可供回溯报告。然而，要改善这个问题是很容易的。如果我们重写程序，使应用程序的执行程序
+(define (analyze-application exp)
+(让((operator-exec (analyze (operator exp)))
+(operand-execs (map analyze (operands exp)))))
+(lambda (env)
+(x:apply (x:advance (operator-exec env))
+operand-execs env))))
+像这样。
+(define (analyze-application exp)
+(让((operator-exec (analyze (operator exp)))
+(operand-execs (map analyze (operands exp)))))
+(define (execute-application env)
+(x:apply (x:advance (operator-exec env))
+操作和执行的环境）)
+执行-应用）)
+那么（在MIT/GNU Scheme中）执行过程将有一个名字，告诉我们它是什么样的执行过程。
+在所有的执行程序中落实这一想法。
+想一想，也许可以实现其他的方法，我们可以在不影响执行速度的情况下提高运行时代码的调试性。你可以做的一件事是将表达式exp作为 "便条 "添加到执行程序上。
+练习5.14：常量折叠 假设我们有一个声明，告诉分析器某些符号有特定的含义（例如声明常规的算术运算符{+, -, *, /, sqrt}是指已知的常量程序）。然后，常数与这些运算符的任何组合，如（/ (+ 1 (sqrt 5)) 2），可以在编译时被分析器评估，并使用其结果而不是在运行时执行计算。这种编译时的优化被称为常数折叠。
+在分析器中实现常数折叠。为了进行常量折叠，分析器需要知道程序文本中哪些符号可以被绑定到已知值。例如，它需要知道汽车是否真的被绑定到成对的原始选择器上。假设分析器可以调用一个过程，找到已知符号的绑定。这个过程应该接收一个符号并返回分析器可能依赖的值，如果符号不在分析器的控制之下，则返回#f。
+练习5.15：其他优化 有许多简单的转换可以改善程序的执行。例如，我们可以使用我们的模式匹配技术来制作一个术语重写系统，实现窥视孔优化和循环不变的代码运动。
+也许增加常见的子表达式消除是很好的；但要小心由于赋值而产生的副作用。在分析中增加一个优化阶段，实现一些经典的编译器优化，并显示其效果。
+练习 5.16: 编译形式化参数声明 尽管对执行过程的组合的转换是相当有效的，而且产生的代码比直接解释要快得多，但我们介绍的版本并不十分巧妙：x:apply的复合过程执行过程解析形式化参数列表以确定如何处理操作数。
+这实际上应该在编译时而不是运行时完成：对组成复合过程的λ表达式的分析应该产生一个执行过程，它知道如何处理操作数和调用环境。
+弄清楚这一点，然后去做。确保你不要把呼叫环境带到绝对需要之外的地方。
+注意：这是一个大项目。
+5.4 探索性行为 在模式匹配中，我们已经遇到了明确的回溯搜索来匹配段变量。但即使在没有段变量的情况下，术语重写系统的实现也需要一些回溯搜索。当一条规则的后果表达式确定匹配的选择性不够大，以至于后果表达式不能替换数据的匹配部分时，即使该规则的前因模式匹配了一块数据，后果表达式也会返回#f，回到匹配中失败，也许会尝试另一条规则。
+另外，优化访问通用程序处理程序的trie机制需要回溯。trie追逐的是参数序列必须满足的谓词序列。但是，可能有多种方式使初始的谓词段与初始的参数段相匹配，所以在 trie 机制中内置了隐含的搜索。
+我们通常认为回溯，以及它在搜索中的极端使用，是一种人工智能技术。然而，回溯可以被看作是一种使系统模块化和独立进化的方式，就像生物系统的探索行为那样。考虑一个简单而实用的例子：解决一个二次方程。二次方程有两个根。我们可以返回两个根，并假设解决方案的用户知道如何处理这个问题，或者我们可以返回一个，并希望得到最好的结果。(典型的平方根程序sqrt返回正平方根，即使有两个平方根！)返回两个解决方案的缺点是，这个结果的接收者必须知道用两个解决方案来尝试计算，要么拒绝一个，要么返回两个计算的结果，而这两个结果本身可能已经做出了一些选择。只返回一个解决方案的缺点是，它可能不是适合接收者的目的的解决方案。这在物理系统的模拟中可能是一个真正的问题。
+语言学上的隐性搜索 我们明确建立的搜索是可以的，但也许我们可以通过在语言学基础设施中建立一个回溯机制来做得更好。方根程序应该返回其中一个根，如果接收者认为第一个选择不合适，它可以选择改变主意，返回另一个根。接收者有责任确定其计算的成分是否合适和可以接受。这本身可能需要一个复杂的计算，涉及的选择在没有进一步计算的情况下后果可能不明显；所以这个过程是递归的。当然，这让我们进入了潜在的致命的指数搜索，通过所有可能的分配给程序中的所有选择。
+重要的是要考虑搜索策略能在多大程度上与程序的其他部分分开，这样就可以在不大幅修改程序的情况下互换搜索策略。在这里，我们采取了进一步的措施，将搜索和搜索控制推入语言所支持的基础设施中，而根本没有明确地将搜索建立在我们的程序中。
+让搜索隐含起来可能会鼓励过度使用搜索。像往常一样，模块化的灵活性可能是危险的。
+这个想法有相当长的历史。1961年，John McCarthy[90]提出了一个非确定性算子amb的想法，它可以用来表示非确定性自动机。1967年，Bob Floyd [35]提出了在计算机语言中建立回溯搜索的想法，作为语言基础设施的一部分。1969年，Carl Hewitt[56]提出了一种体现这些想法的语言PLANNER。在20世纪70年代早期，Colmerauer, Kowalski, Roussel和Warren开发了Prolog[78]，这是一种基于一阶谓词微积分的有限形式的语言，它使回溯搜索变得隐含。22 5.4.1 amb McCarthy的amb需要任何数量的参数。amb表达式的值是其中一个参数的值，但我们事先不知道哪个参数是合适的。比如说
+(环境 1 2 3)
+产生的值是1或2或3，取决于计算的未来。表达式(amb) ，没有参数，没有可能的值：它是一个计算的失败，拒绝了先前的选择。
+一个使用amb的表达式可能有许多可能的值。为了看到所有可能的值，我们先打印一个，然后导致失败，迫使产生下一个值，直到没有其他值为止。
+(开始
+(换行)
+(write-line (list (amb 1 2 3) (amb 'a 'b)))
+(amb))
+;;;开始一个新的问题 (1 a)
+(2 a)
+(3 a)
+(1 b)
+(2 b)
+(3 b)
+;;;没有更多的值了 使用amb，我们可以相当容易地生成毕达哥拉斯式三联体。我们用amb来生成整数的三联体，并拒绝那些非毕达哥拉斯式的三联体。
+为了方便用amb编程，我们引入了一个辅助工具。我们使用require作为一个过滤器，如果它的参数谓词表达式不是真的，它将强制失败并进行回溯。
+(定义 (require p)
+(if (not p) (amb) 'ok))
+为了得到一个区间内的某个整数，我们写道。
+(定义 (an-integer-between low high)
+(要求(<=低位高位))
+(amb low (an-integer-between (+ low 1) high) ))
+有了这些助手，我们可以用非常直观的形式写出毕达哥拉斯三联体的搜索。
+(定义 (a-pythagorean-triple-between low high)
+(让((i (an-integer-between low high)))
+(让((j (an-integer-between i high)))
+(让((k (an-integer-between j high)))
+(要求 (= (+ (* i i) (* j j))
+(* k k))
+(list i j k)))))
+(开始
+(换行)
+(Write-line (a-pythagorean-triple-between 1 20))
+(amb))
+;;;开始一个新的问题
+(3 4 5)
+(5 12 13)
+(6 8 10)
+(8 15 17)
+(9 12 15)
+(12 16 20)
+;;;没有更多的值了 这似乎是一个普遍有用的设施。让我们看看如何使它成为我们语言的一部分。
+5.4.2 实现伏笔 很好，我们把语言表达式的分析与执行分离开来，因为这允许我们在不改变任何句法分析的情况下改变执行。所以在语言中建立非确定性搜索只是改变执行程序的问题。关键的一步是将执行程序转变为连续传递式，除了环境参数之外，每个执行程序还需要两个连续参数：一个通常被命名为success，在计算成功时被调用，另一个通常被命名为fail，在计算不成功时被调用。
+执行过程通过调用带有该值的成功延续和一个失败延续来返回一个提议的值。失败延续是 "投诉部门"：如果计算的某个未来不喜欢提议的值，它可以调用没有参数的失败延续来要求一个不同的结果。(在第4.3节中，我们用返回值#f作为失败的指示。在第4.2.2节中，我们使用了成功和失败的延续。使用成功和失败的延续是比较灵活的，可以扩展到包括关于为什么值被拒绝的信息）。
+因此，一个执行程序的一般模式将是。
+(lambda (environment succeed fail)
+;; succeed = (lambda (value fail)
+;; 试试这个值。
+;;如果不喜欢它（失败）。
+;; ...)
+;; fail = (lambda () ...)
+...
+;;试着做出一个结果。如果不能，（失败）。
+...)
+向继续传递式的转变有点令人不快，因为它大大地扩展了代码，但它基本上是机械的。例如，第260页上的分析-应用程序是。
+(定义 (分析-应用表达)
+(让((operator-exec (analyze (operator expression)))
+(operand-execs (map analyze (operands expression)))))
+(lambda (environment)
+(x:apply (x:advance (operator-exec environment))
+operand-execs environment))))
+如果我们将这段代码转换为继续传递式，我们会得到：23
+(define (analyze-application exp)
+(让((operator-exec (analyze (operator exp)))
+(operand-execs (map analyze (operands exp)))))
+(lambda (env succeed fail)
+(operator-exec env
+(lambda (operator-value fail-1)
+(a:advance operator-value
+(lambda (procedure fail-2)
+(a:apply procedure operand-execs env succeed fail-2))
+失败-1))
+fail))))
+这个执行程序比它派生出来的那个程序更复杂。在原始执行过程的主体中，表达式（operator-exec environment）向表达式（x:advance ...）返回一个值，后者又向表达式（x:apply）返回一个值。在新的执行过程中，这些嵌套的表达式已经消失。每个过程通过调用一个接受其计算结果的过程而 "返回"。
+由于我们经常要强制取值，所以做一个捕捉强制取值的抽象是合适的。过程execute- strict隐藏了与强制评估被推迟的表达式以确保未推迟的值的过程相关的无趣的细节。在上面的分析-应用中，它被用来强制运算符的值，以便得到一个适用的过程。
+(定义 (execute-strict executor env succeed fail)
+(执行人设想)
+(lambda (value fail-1)
+(a:前进值成功失败-1))
+失败）。
+程序exise-strict调用给定的执行程序
+(执行者)。然后，其结果被传递给a:advance以被强制。强制的值然后被传递给成功的续集
+(success)，有效地将强迫的结果返回给execute-strict的调用者。
+使用execute-strict，我们可以重写analyze-application。
+(define (analyze-application exp)
+(让((operator-exec (analyze (operator exp)))
+(operand-execs (map analyze (operands exp)))))
+(lambda (env succeed fail)
+(execute-strict operator-exec env
+(lambda (procedure fail-2)
+(a:apply procedure operand-execs env succeed fail-2))
+fail))))
+每个执行程序都必须以这种方式进行转换。我们在analyze-if中使用execute-strict来强迫条件的谓词的值，没有它我们就无法继续。
+(定义 (analyze-if exp)
+(让((predicat-exec (analyze (if-predicate exp)))
+(sequent-exec (analyze (if-consequent exp)))
+(alternative-exec (analyze (if-alternative exp)))))
+(lambda (env succeed fail)
+(execute-strict predicate-exec env
+(lambda (pred-value pred-fail)
+((if pred-value consequent-exec alternative-exec)
+env succeed pred-fail))
+fail))))
+大多数转换都是直截了当的，我们不会在本文中给你带来细节上的负担。但有一个有趣的情况：赋值。通常在回溯系统中，我们需要两种不同的赋值。通常的永久性赋值，set！，对于在搜索过程中积累信息是很有用的，比如某个分支被调查了多少次。
+还有一个可撤销的赋值maybe-set！，如果它所在的分支被收回，就必须撤销。通常的永久赋值是这样实现的。
+(定义(分析-分配exp)
+(让((var (assignment-variable exp))
+(value-exec (analyze (assignment-value exp)))))
+(lambda (env succeed fail)
+(value-exec env
+(lambda (new-val val-fail)
+(set-variable-value! var new-val env)
+(成功 'ok val-fail))
+fail))))
+可撤销的赋值更为复杂。与成功的赋值一起传递的失败续集将被赋值的变量的值恢复到它以前的值。
+(define (analyze-undoable-assignment exp)
+(让((var (assignment-variable exp))
+(value-exec (analyze (assignment-value exp)))))
+(lambda (env succeed fail)
+(value-exec env
+(lambda (new-val val-fail)
+(让((old-val
+(lookup-variable-value var env))
+(set-variable-value! var new-val env)
+(成功 'ok
+(lambda ()
+(set-variable-value! var old-val env)
+(val-fail)))))
+fail))))
+唯一其他有趣的情况是实施amb本身。在这里，如果最后一个选择被拒绝，我们就必须选择下一个选择。这是由当前备选方案的失败延续来完成的。
+(定义 (analyze-amb exp)
+(让((alternative-execs
+(map analyze (amb-alternatives exp)))))
+(lambda (env succeed fail)
+(let loop ((alts alternative-execs))
+(if (pair? alts)
+((car alts) env succeed
+(lambda ()
+(循环 (cdr alts))))
+(失败))))))
+如果没有剩余的备选方案，amb的执行程序会调用它所调用的失败延续。这使得程序对备选方案树进行了深度优先搜索。除了对read-eval-print循环（第246页）进行调整以使其与继续传递结构一起工作之外，这就是它的全部内容了。练习5.17：一个谜题 使用amb将下面的谜题正式化并解决。两个女人（Alyssa和Eva）和四个男人（Ben、Louis、Cy和Lem）坐在一张圆桌前，正在玩牌。每个人都有一手牌；没有两手牌是一样强的。
+本坐在伊娃对面。
+阿丽莎右边的那个人的手比莱姆的更有力。
+伊娃右边的那个人的手比本更有力。
+本右边的那个人的手比赛的更有力。
+本右边的人的手比伊娃的更有力。
+Lem右边的那个女人的手比Cy的更有力。
+赛的右边那个女人的手比路易斯的更有力。
+桌子上的安排是什么？它是唯一的，直到桌子的旋转吗？用雄心勃勃来说明每个选择可能的替代方案。
+还要确定，如果不告诉我们 "本的右边的人的手比赛的强"，而是告诉我们 "本的右边的人不是赛"，那么有多少种解。解释一下这个结果。
+注意：最直接的解决方案很慢；在笔记本电脑上需要几个小时（2017）。然而，有一个聪明的解决方案，只需大约2分钟就能收敛。25 练习5.18：失败检测 实现一个名为if-fail的新结构，允许程序捕捉表达式的失败。if-fail接收两个表达式。它像往常一样对第一个表达式进行评估，如果评估成功，就像往常一样返回其值。然而，如果评估失败，则返回第二个表达式的值，如下面的例子。
+(if-fail (let ((x (amb 1 3 5)))
+(require (even? x))
+x)
+all-odd 'all-odd)
+(if-fail (let ((x (amb 1 3 4 5)))
+(require (even? x))
+x)
+'all-odd)
+4 提示：这是很微妙的!练习5.19: 作业 在练习5.18中指定的if-failas的情况下，以下评估的结果是什么？
+(让((对'()))
+(if-fail (let ((p (prime-sum-pair '(1 3 5 8) ' (20 35 110)))))
+(set! pairs (cons p pairs))
+(amb))
+对))
+(让((对'()))
+(if-fail (let ((p (prime-sum-pair '(1 3 5 8) ' (20 35 110)))))
+(maybe-set! pairs (cons p pairs))
+(amb))
+对))
+你可以使用以下定义。
+(定义 (prime-sum-pair list1 list2)
+(让((a (an-element-of list1))
+(b (an-element-of list2)))
+(要求(素数?(+ a b)))
+(列表a b))
+(定义 (an-element-of lst)
+(如果 (null? lst)
+(伏)
+(amb (car lst)
+(an-element-of (cdr lst))))))
+(定义 (素数? n)
+是
+(=n (最小的除数n))
+(定义 (最小除数 n)
+(定义 (find-divisor test-divisor)
+(cond ((> (square test-divisor) n) n)
+((除以? 测试除数n) 测试除数)
+(other (find-divisor (+ test-divisor 1))))))
+(定义 (除以? a b)
+(=(余数b a) 0))
+(find-divisor 2))
+练习5.20：选择排序 按照写法，amb机制总是按照amb表达式中给出的顺序来尝试选择。但有时我们可以使用上下文信息来做一个更好的排序。例如，在一个棋盘游戏中，从可能的合法棋步中选择棋子应该取决于棋盘的状态。让我们发明一个可以给我们这种灵活性的amb版本。让我们假设每个选择表达式都与一个数字权重表达式配对。
+(选择 (<重量-1> <选择-1>) ...(<重量-n><选择-n>)
+我们可以评估所有的权重表达式，并利用它们来选择下一个选择表达式进行评估和返回。当然，在做出选择后，它就被耗尽了，如果失败回到这个选择形式，在做出下一个选择前必须重新评估剩余的权重表达式。
+a.实施选择，使具有最大权重的选择被选中。
+b.在实际情况下，权重通常不足以做出唯一的选择。有时，一个好的策略是以与计算出的权重成正比的概率做出一个随机的选择。实现一个替代选择器pchoose，其语法与choose相同，以这种方式工作。
+
+5.5 揭示底层的延续性 现在我们可以处理真正的魔法了!大多数语言，包括Scheme，都是围绕着表达式的概念组织的。一个表达式有一个它 "返回 "的值。一个表达式是由子表达式组成的，每个子表达式都有一个返回给它所属的大表达式的值。表达式的基本概念是什么？考虑一下复合表达式
+(+ 1 (* 2 3) (/ 8 2))
+当然，这个值是11。它是通过评估运算符和操作数来计算的，然后应用运算符的值
+(过程）到操作数（参数）的值。
+这个过程可以通过重新表述连续传递式的计算而得到澄清。在这里，我们发明了新的运算符**，//，和++来命名继续传递式的乘法、除法和加法程序。
+(定义 (** m1 m2 continue)
+(继续 (* m1 m2) ))
+(定义 (//n d continue)
+(继续 (/ n d))
+(定义 (++ a1 a2 continue)
+(继续(+a1 a2)))
+这些过程与通常的* , /, 和 + 不同，它们不返回给它们的调用者；相反，它们被定义为用计算出来的值调用它们的最后一个参数。收到该值的参数被称为延续过程。我们在第4.2.2节和第5.4.2节以及第188页的unifier中使用了延续传递的风格。
+(+ 1 (* 2 3) (/ 8 2))的计算以连续传递的方式进行，看起来像。
+(** 2 3
+(lambda (the-product)
+ ; A
+(// 8 2
+(lambda (the-quotient)
+ ; B
+(++ 1的产品的商数k)))))
+其中k是最后的延续过程，它需要一个参数，也就是计算的值11。26 在这个例子中，过程**计算了2和3的乘积，并且用6调用了它的继续过程（由注释A标记的λ表达式）。 因此，在A的主体中，product被绑定为6。在A的主体中，过程//计算8和2的商，并将结果4传递给标记为B的过程，其中商被约束为4。 在B的主体中，过程++计算1、6和4的和，并将结果11传递给延续过程k。
+在继续传递风格中，没有返回值的嵌套表达式。所有的结果都传递给延续过程。因此，不需要堆栈，因为没有人在等待返回的值！所以，我们不需要堆栈。相反，我们将表达式树线性化，就像编译器为了在顺序机中计算表达式的值而必须采取的方式一样。
+底下的延续 这个想法是，表达式中包含子表达式的槽只是一个过程的语法糖，这个过程接受子表达式的值，以便以后用于继续表达式的评估。这个想法非常强大，因为续程代表了计算的整个未来。这种对表达式含义的更深层次的理解使我们能够摆脱单值表达式的编程风格，但也要付出相当大的复杂性和句法嵌套的代价。
+每当一个表达式被评估时，就会有一个期待表达式结果的续集存在。例如，如果表达式在顶层被求值，那么这个延续将获取结果，将其打印在屏幕上，提示下一个输入，对其进行求值，如此反复，直到永远。大多数时候，延续包括由用户代码指定的动作，例如，一个延续将获取结果，将其与存储在局部变量中的值相乘，加7，并将答案交给顶层延续打印。通常情况下，这些无处不在的延续被隐藏在幕后，程序员不会过多考虑它们。Scheme为程序员提供了获取表达式的底层延续的能力。底层续集是一个一流的对象，可以作为参数传递，作为值返回，并纳入数据结构中。大多数其它语言都不支持使用第一类延续体。(有的语言包括SML、Ruby和Smalltalk）。
+明确的底层延续是最强大的
+(是程序员的最危险的工具。延续给了程序员对时间的明确控制。一个计算可以在某一时刻被捕获和暂停，并在未来任何时间恢复和继续。这使得我们有可能写出循环程序
+(合作式多任务处理），再加上一个定时器中断机制，我们就得到了分时（抢占式多任务处理）。在你可能需要明确处理延续的情况下，Scheme让你通过创建一个明确的过程作为当前的延续来做到这一点。但是，在我们能够利用这种力量之前，我们需要对延续性有更深入的了解。
+继续是计算的控制状态。27 如果继续被调用，计算将在继续所代表的地方继续进行。延续可以表示将子表达式的值返回到包围表达式的评估中的行为。继续是一个过程，当它被调用时，它将其参数作为子表达式的值返回到包围表达式的评估中。一个续程可以被多次调用，允许在某一点上以续程返回的不同值恢复计算。我们很快就会看到一个例子。
+Scheme  provides  call-with-current-continuation
+(缩写为call/cc），它可以访问表达式结构下的连续体。call/cc的参数是一个过程，它获得了call/cc表达式的延续作为其参数。同样：续集是一个一级过程，它需要一个参数--当续集被调用时要返回的值。28 下面是一个简单的例子。
+(定义foo)
+(设置！foo
+(+ 1
+(电话/cc
+(lambda (k)
+;;k是调用/cc表达式的延续;;。
+;;所以如果我们用6调用k ;;;那么foo将得到11的值。
+(k (* 2 3))))
+(/ 8 2)))
+foo 11 所以call/cc用call/cc的继续调用其参数。还不是很刺激!到目前为止，这与(+ 1 (* 2 3) (/ 8 2))的直截了当的评估没有区别。
+但《计划》中的程序具有不确定的范围。这是一个改变游戏规则的问题。让我们把续程保存起来，以便重复使用。
+(define(definebar))
+foo)
+(设置！foo
+(+ 1
+(电话/cc
+(lambda (k)
+(set! bar k)
+(k (* 2 3))))
+(/ 8 2)))
+foo 11
+(第2条)
+foo 3 哇，看看发生了什么？我们在bar中保存了计算的未来，最终给了foo一个值。当我们用另一个值调用该延续时，foo的赋值被重新执行，导致foo的值不同。
+5.5.1 作为非局部退出的延续 考虑下面这个非局部退出延续的简单例子（改编自计划报告[109]）。
+(电话/cc
+(lambda (exit))
+(for-each (lambda (x)
+(if (negative? x) (exit x)))
+'(54 0 37 -3 245 -19)) ; **
+(exit #t))
+-3 因为Scheme的for-each过程是按从左到右的顺序走过列表的，所以遇到的第一个负数元素是-3，它被立即返回。如果列表中没有负数，结果就会是#t（因为外层lambda表达式的主体是两个表达式的序列，即for-each表达式之后是返回#t）。
+call/cc的使用可能会出现在其他一些表达式中，如下面的定义。(传统上，与底层续集绑定的符号以字母k开头。)
+(定义 (第一负数的数字列表)
+(电话/cc
+(lambda (k exit)
+(或 (call/cc (lambda (k shortcut)
+(for-each (lambda (n)
+(cond ((not (number? n))
+(pp '(not-a-number: ,n))
+(k exit #f))
+((负? n)
+(k shortcut n))
+(else 'keep-looking)))
+数字列表)
+#f))
+'no-negatives-found))))
+这表现如下。
+(第一个负数'(54 0 37 -3 245 -19))
+-3
+(第一个负数'(54 0 37 3 245 19))
+没有发现负数
+(第一负数'(54 0 37 没有 245 -19))
+(not-a-number: no)
+#f 这展示了嵌套的延续，其中最外层的k退出延续退出整个对首负的调用，而内部的k捷径延续只退出到包围的二元结，然后从那里继续。
+简而言之，如果一个由call/cc捕获的延续被调用并带有一些值，那么计算将继续进行，将该值作为捕获它的call/cc的调用值返回，并从那里继续正常执行。
+练习5.21：非本地退出 这个练习要在本地Scheme中完成，在那里比在我们的嵌入式解释器中更容易调试和测量。
+在本地Scheme中对call/cc有一个很好的实现。
+a.定义一个简单的过程，snark-hunt，29它以一棵树为参数，递归地在树上的任何叶子上寻找符号snark。它应该立即停止搜索，如果找到了就返回#t，否则返回#f。使用call/cc。比如说。
+(snark-hunt '(((a b c) d (e f)) g (((snark . "oops" h) (i . j)))))
+#t 注意，输入到snark-hunt的信息可能不只是由适当的列表组成。
+b.你如何验证snark-hunt立即退出，而不是默默地通过多个返回级别返回？定义一个新的过程，snark-hunt/instrumented，来证明这一点。
+提示：设置一个退出状态标志，然后在错误的返回路径上发出错误信号，如果仔细放置的话，可能会奏效，但简单地通过pp追踪可能更容易。任何快速而肮脏的黑客都可以工作。这里的目标是建立你对连续的直觉，而不是为了发布产品质量好的代码。简要说明一下你的策略。
+5.5.2 控制权的非局部转移 前面的内容有些简单，因为捕获的连续体只用于非局部的退出。但连续体比这更强大：它们一旦被调用就可以重新进入。下面的例子说明了这个想法：30
+(定义the-continuation #f)
+(定义 (测试)
+(让((i 0))
+;; call/cc的参数将由call/cc产生的;;续篇分配给;;全局变量the-continuation。
+(call/cc (lambda (k) (set! the-continuation k))
+;; 当the-continuation被调用时，执行;; 在此恢复。
+(set! i (+ i 1))
+i))
+这种行为也许是令人惊讶的。过程test创建了一个初始化为0的局部变量i。它还创建了一个continuation，代表从let表达式主体中的调用/cc表达式返回的控制状态，并将该状态存储在全局变量the-continuation中。然后它增加i并返回i的新值：1。
+(测试)
+1 当调用the-continuation时，调用/cc返回到let表达式的主体。执行过程中，将i递增并返回其新值。该续集可以重复使用，再次增加i并返回其新值。
+(the-continuation2 'OK)
+(the-continuation3 'OK)
+(参数OK是调用/cc的值；它被let主体所忽略)。
+我们把这个延续保存在 another-continuation 中，所以我们可以通过再次执行 test 来制作一个新的延续保存在-continuation 中。对test的调用创建了另一个i的实例，它被初始化为0。
+(定义另一个延续性的延续性)
+(测试)
+1 这个新的延续是独立于我们在另一个延续中保存的延续。
+(the-continuation2 'OK)
+(another-continuation 'OK); 使用保存的续集 4 现在考虑以下稍微有趣的情况。
+(定义the-continuation #f)
+(定义sum #f)
+(开始
+(设置！总和
+(+2 (call/cc
+(lambda (k)
+(set! the-continuation k)
+(k 3)))))
+'ok)
+好的 总数 5
+(the-continuationok 4)
+总数 6
+(the-continuationok 5)
+sum 7 仔细注意，通过调用the-continuation，重新进入这个被捕获的续集，控制权返回到加法之前，因此，在分配变量sum和返回符号ok之前。这就是为什么调用它总是返回符号ok的原因。
+然而，sum被分配为2和我们提供给the-continuation的参数之和。因此，当我们问及sum的值时，我们得到了新的sum。这展示了如何使用捕获的续集从中间的返回点继续前进。我们将在第5.5.3节中看到这种机制是如何用于回溯的。
+5.5.3 从延续到amb 事实证明，几乎所有我们想做的事情，包括实现amb，都可以只用Scheme的本地调用/cc来完成；让我们看看如何做到这一点。
+事实上，连续性是一种支持回溯的自然机制。可以做出选择，如果这个选择被证明是不合适的，可以做出另一个选择，并解决其后果。(在我们的平方根例子中，平方根程序应该返回两个平方根的amb，其中amb是选择并返回其中一个的操作符，如果第一个被拒绝，可以选择提供另一个。然后，接收方可以直接继续使用给定的解决方案；但如果在某一时刻，接收方发现其计算不符合某些约束条件，它可以失败，导致amb算子修改其选择，并通过其延续性返回新的选择。实质上，延续允许选择的生成器被写成一个与选择的接收者/测试者交互的循环程序。
+回溯器的核心是amb-list，它接收一连串的同级thunks，每个thunks代表amb表达式的一个备选值。这些thunks是由amb宏产生的，它在语法上将amb表达式转换为amb-list表达式，如下所示。
+(amb e1 ... en) ==>
+(amb-list (list (lambda () e1) ... (lambda () en) ))
+amb宏（以可移植的语法规则形式编写）是。
+(define-syntax amb
+(语法规则()
+((amb exp ...)
+(amb-list (list (lambda () exp) ...)))))
+比如说。
+(pp (syntax '(amb a b c) user-initial-environment))
+(amb-list (list (lambda () a) (lambda () b) (lambda () c) ))
+搜索维护着一个搜索时间表，这是一个thunks的议程，当需要一个amb表达式返回一个新的替代值时，可以调用这个议程。过程amb-list首先将其替代值的thunks添加到搜索时间表中，然后将控制权交给时间表上第一个待定的thunk。如果没有替代值（表达式只是(amb)），那么amb-list就会产生控制权，而不向搜索时间表添加任何东西，并增加一个全局计数器来审计搜索。
+(定义 (amb-list alternatives)
+(如果 (null? alternatives)
+(设置!*呼叫失败的次数*)
+(+调用失败次数* 1))
+(电话/cc
+(lambda (k)
+((添加到搜索时间表)
+(map (lambda (alternative)
+(lambda ()
+(in-continuation k alternative)))
+替代品))
+(收益率))))
+对于一个特定的amb表达式，备选方案的thunk被构造出来，以便从该amb表达式返回，使用在其包围的amb-列表的入口处捕获的continuation, k。搜索时间表既是一个堆栈也是一个队列；我们很快就会看到原因。
+(define (yield)
+(if (deque-empty?(*搜索时间表*))
+((*top-level*) 'no-more-alternatives)
+((pop!(*search-schedule*)))))
+你可能对我们调用*top-level*和add-to-search-schedule来获得做这些工作的程序感到不解。
+我们还调用*search-schedule*来获得搜索时间表对象。
+这种间接性的原因是，这些是Scheme参数对象（见第394页）。我们这样定义它们是因为我们将动态地把它们绑定到不同的值上，这一点很快就会显示出来。我们把*search-schedule*初始化为空。
+(define *search-schedule*)
+(make-parameter (empty-search-schedule)))
+神奇的是amb-list中的调用/cc。amb-list（因此也是amb）执行的是产量。这个调用/cc的延续，也就是这个amb的延续，被放到了这个amb的每个备选方案的搜索时间表上。当一个从搜索时间表中跳出的替代物被执行时，它的值由将该替代物放入搜索时间表的任何amb表达式返回。
+通过使搜索时间表既是堆栈又是队列，我们可以同时实现深度优先和广度优先搜索，因为它们只在时间表的顺序上有所不同。这是通过将add-to-search-schedule参数动态地绑定到所需的排序上实现的，如下图所示。
+默认是深度第一。
+(define add-to-search-schedule
+(make-parameter add-to-depth-first-search-schedule))
+下面两个程序可以用来控制执行thunk时的搜索顺序，thunk封装了一个要解决的问题，通过动态绑定add-to-search-schedule。关于它们的使用实例，请参见第293页的练习5.22。
+(定义 (with-depth-first-schedule problem-thunk)
+(电话/cc
+(lambda (k)
+(参数化((add-to-search-schedule add-to-epth-first-search-schedule)
+(*搜索-时间表*)
+(empty-search-schedule))
+(*顶层* k))
+(problem-thunk)))))
+(定义 (with-breadth-first-schedule problem-thunk)
+(电话/cc
+(lambda (k)
+(参数化((add-to-search-schedule add-to-breadth-first-search-schedule)
+(*搜索-时间表*)
+(empty-search-schedule))
+(*顶层*k))
+(problem-thunk)))))
+这些程序还通过动态地绑定*搜索时间表*和*顶层*来局部地重新初始化它们，提供范围内的控制而不是范围。如果yield发现没有更多的替代方案，它可以使这个搜索终止，并将值no-more-alternatives返回给with-...-first- schedule的调用者。比如说。
+(define search-order-demo
+(lambda ()
+(让((x (amb 1 2)))
+(pp (list x))
+(让((y (amb 'a 'b)))
+(pp (list x y))))
+(amb))
+(以深度为先的时间表(1))
+(1 a)
+(1 b)
+(2)
+(2 a)
+(2 b)
+no-more-alternatives search-order-demo)
+(with-breadth-first-schedule(1)
+(2)
+(1 a)
+(1 b)
+(2 a)
+(2 b)
+no-more-alternatives search-order-demo)
+顺序是通过低级堆栈和队列突变器来实现的。在深度优先的情况下，替代品被放在时间表的前面，在广度优先的情况下，它们被放在时间表的后面。在这两种情况下，它们都是按照提供给amb的顺序出现在时间表上的。
+(定义(添加深度第一搜索时间表的替代品)
+(for-each (lambda (alternative)
+(推!(*搜索时间表*) 替代))
+(反向替代物)))
+(定义(添加到宽度第一的搜索时间表的替代品)
+(for-each (lambda (alternative)
+(加到最后!(*搜索时间表*) 替代))
+替代品))
+参数*top-level*被初始化，这样当没有找到替代物时，系统就会带着给定的结果继续进行read-eval-print循环。(在上面的代码中，yield将符号no-more-alternatives传递给top level）。注意，with-...-first-schedule重新绑定*top-level*。
+(define *top-level*)
+(make-parameter
+(lambda (result)
+(abort->nearest
+(cmdl-message/active
+(lambda (port)
+(鲜线端口)
+(显示"；"端口)
+(写入结果端口)))))))
+为了启动一切，我们还需要。
+(定义 (init-amb)
+(reset-deque!(*搜索时间表*))
+(设置！*失败的呼叫次数* 0)
+'完成)
+最后，几乎每个使用amb的程序都会需要。
+(定义 (require p)
+(if (not p) (amb) 'ok))
+这就是它的全部内容!用call/cc能做的事情是很惊人的。因此，如果我们的本地环境中有call/cc，我们就不需要做一个嵌入式系统来实现amb（就像我们在5.4.2节中做的那样）。
+尝试替代方案的其他方法 如果有多种可能的方法来解决一个子问题，而其中只有一些适合于解决更大的问题，像生成-测试那样依次尝试它们只是一种方法。例如，如果一些选择导致了非常长的
+(在测试器中的计算（也许是无限的），而其他的计算可能会迅速成功或失败，因此将每个选择分配给一个可能并发运行的线程是合适的。这就要求线程有一种沟通的方式，也许一个成功的线程可以杀死其兄弟姐妹。
+所有这些都可以用连续性来安排，线程与线程之间的通信围绕事务来组织。
+练习5.22：广度与深度 回顾一下寻找毕达哥拉斯式三联体的笨方法（在第272页）。我们给搜索器配备了一个尝试过的三联体数量的计数器。
+(定义 (a-pythagorean-triple-between low high)
+(让((i (an-integer-between low high)))
+(让((j (an-integer-between i high)))
+(让((k (an-integer-between j high)))
+(set! triples-test (+ triples-test 1))
+(要求 (= (+ (* i i) (* j j))
+(* k k))
+(list i j k)))))
+(define triples-test 0)
+请考虑以下实验。首先，我们尝试广度优先搜索。
+(开始 (init-amb)
+ 重置故障计数器。
+(set! triples-tested 0)
+(with-breadth-first-schedule
+(lambda ()
+(pp (a-pythagorean-triple-between 10 20)))))
+(12 16 20)
+triples-test 246 *number-of-calls-to-fail* 282 然后我们尝试深度优先搜索。
+(开始 (init-amb)
+(set! triples-tested 0)
+(以深度为先的日程安排
+(lambda ()
+(pp (a-pythagorean-triple-between 10 20)))))
+(12 16 20)
+三元测试 156 *失败次数* 182 a. 解释深度优先和广度优先搜索在三元测试中的区别（用粗略的术语，而不是精确的计数）。
+b.解释一下测试的三倍体数量和*失败的调用次数*之间的区别。c. 考虑到广度优先搜索做了更多的工作，为什么下面的a-pythagorean-triple-from搜索在深度优先搜索策略下不能使用，而在广度优先策略下却可以正常使用？
+(定义 (a-pythagorean-triple-from low)
+(让((i (an-integer-from low)))
+(让((j (an-integer-from i)))
+(让((k (an-integer-from j)))
+(要求 (= (+ (* i i) (* j j))(* k k))
+(list i j k)))))
+(定义 (an-integer-from low)
+(amb low (an-integer-from (+ low 1)))))
+(以深度为先的日程安排
+(lambda ()
+(pp (a-pythagorean-triple-from 10))))
+练习5.23：不那么确定的非确定性 Eva Lu Ator指出，我们的amb实现并不像人们有时希望的那样是非确定性的。具体来说，给定一个amb形式的备选方案列表，我们总是先选择最左边的备选方案，然后是最左边的第二个，以此类推，从左到右的顺序。
+她建议，人们可能希望推翻这种选择，比如说，从右到左，甚至以随机的顺序。具体来说，她希望有这样的做法。
+(用从左到右的顺序问题------)。
+(with-right-to-left-ordering problem-thunk)
+(with-random-ordering problem-thunk)
+她很快指出，这种排序的选择与搜索顺序（深度优先、广度优先或其他）无关。
+a.在什么情况下你会想要一个无序的
+(随机)amb?创作一个具体的简短例子，作为b部分的测试案例。
+b.实现这三种选择顺序，并举例说明每种选择的用途。为了简单和统一起见，你的代码应仿照with-depth-first-schedule、add-to-depth-first-search-schedule等的模式。提示：可以随意使用Scheme的内置随机程序。
+练习5.24：嵌套策略 我们打算让广度优先和深度优先的搜索策略可以在搜索中任意嵌套。目前实现的深度优先和广度优先调度的嵌套工作是否正确？具体来说，设计一个实验，暴露出错误（如果有的话），或者用轶事证明它确实工作正确（如果有的话）。解释一下你的理由。
+这涉及到精心设计区分深度优先和广度优先搜索策略的实验，然后以有趣的方式将其组成，以展示对嵌套搜索的局部控制。
+确定一类自然的问题，这种灵活性对这些问题是有用的--而不是为了证明一个观点而砍掉的。
+练习5.25：可撤销赋值 在第5.4.2节amb的嵌入式解释器版本中，我们展示了如何使用两种赋值：通常的永久赋值，用set！表示，以及可撤销赋值，用maybe-set！表示，通过回溯可以撤销。我们可以在本节的本地代码实现中为可撤销的效果实现一个通用的包装器。
+(定义 (effect-wrapper doer undoer)
+(for-next
+(lambda () (undoer) (yield)))
+(行动者))
+(定义 (force-next thunk)
+(push!(*搜索计划*) thunk))
+然后我们就可以把 maybe-set！作为一个宏来实现。
+(define-syntax maybe-set!
+(语法规则()
+((maybe-set! var val)
+(让((old-val var))
+(effect-wrapper
+(lambda ()
+(set! var val))
+(lambda ()
+(set! var old-val)))))))
+不幸的是，这只对深度优先搜索有意义，对广度优先搜索没有意义。请解释一下原因。这个问题可以解决吗？练习5.26：嵌入式系统中的搜索控制 我们如何改变5.4.2节的嵌入式系统，通过对有成功和失败延续的组合器的分析，使深度优先搜索（像现在这样）和广度优先搜索都能实现？解释一下你的策略。做一个新的实现，包含这种控制搜索顺序的能力。注意：这是一个相当大的转变。
+5.6 权力与责任 在本章中，我们已经看到，我们从教会-图灵的计算普遍性中获得了巨大的权力。我们永远不能抱怨"我不能用我必须使用的语言来表达这个。"如果我们知道解释和编译的技巧，我们总是可以摆脱任何语言的束缚，因为总是有可能为手头的问题建立一个适当的特定领域语言。这里的论述使用Scheme作为底层语言，并在Scheme之上构建强大的基于Lisp的语言。我们在这里使用Lisp语法的原因是它极大地简化了对这些思想的阐述。(参见关于infix符号的练习5.7。如果我们不得不用一种具有复杂语法的语言来做这件事，那么论述就会长很多倍，也很乏味）。但是解释的力量在任何图灵通用语言中都是可用的。
+对于未来的灵活性来说，我们构建的语言必须是简单和通用的。它们必须有非常少的机制：基元、组合的手段和抽象的手段。我们希望能够根据需要扩展它们，并且能够混合和匹配程序的各个部分。而且，最重要的是，当我们有多种语言时，每一种语言都适合于问题的某些部分，必须有好的方法让这些语言能够互操作。
+巨大的权力带来了更大的责任。每当我们创造一种语言时，我们也必须把它记录下来，以便可以教给别人。我们今天写的程序在将来会被其他人阅读和修改。(事实上，即使我们明年读到我们去年写的东西，我们也会有很大的不同，我们也不会记得我们所做的细节)。因此，重要的是，我们要非常谨慎地使用这一权力，而且当我们这样做时，要非常仔细地记录结果。否则，我们就会给下一个程序员（或我们自己）留下一个难以理解的烂摊子。
+来进行清理和重写。不要参与到 "巴别塔 "的创建中。从UNIX衍生出来的系统显示了这个问题的好坏两方面。这些命令都有自己的语言。
+如果你了解awk、sed和grep，你就会知道每一种都有自己的语言，包括我们在第2.2节讨论的非常丑陋的、定义不好的正则表达式语言。当然，这些语言中的每一种都有助于使眼前的问题更容易解决。但是它们并没有一个一致的基本思想，使它们易于学习和理解。只要想想shell的引号约定与grep的引号约定是如何互动的，你就会明白这一点。要成为UNIX的大师，你必须学习很多讨厌的特殊大小写的东西。另一方面，UNIX本身有一种奇妙的简单而优雅的方式来把东西粘在一起：流。每一个基本的UNIX工具都从流中获取输入，并放出流。它们可以通过管道将输出流与输入流连接起来。这一课非常值得深思。
+
+1 但由于我们的eval是一个通用程序，eval所定义的符号集可能很容易改变，甚至是动态的。
+2我们的解释器的实现由于使用Scheme作为实现语言而变得更加简单。我们继承了Scheme阅读器，所以我们的语法非常简单；我们继承了尾部递归，所以我们在实现过程调用时不需要特别注意；我们使用Scheme过程作为原语。如果我们选择一种不同的实现语言，例如C，我们会有更多的问题需要解决。尽管如此，在任何语言中建立这种解释器都是可能的。
+3在g:apply和其他名称中使用g:前缀是为了确定这些名称是针对这个 "通用 "解释器的。在后面的章节中，我们将介绍不同版本的解释器，每个版本都有自己的前缀。
+4复数在计算机中通常表示为浮点数。计划复数的各部分可以是整数或有理分数，也可以是实数。
+5 对引文的理解及其与评价的关系在分析哲学中有着深刻的影响。这方面的一个很好的阐述是在布莱恩-坎特韦尔-史密斯1982年的博士论文中[112]。
+6一个符号是一个原子对象，由一串字符命名。符号之所以有趣，是因为它是唯一的：具有相同字符串名称的符号的任何两个实例可以被假定为是相同的（它们是eq？）
+7以这种方式找到的许多Scheme基元都可以工作，比如car或+。然而，以程序为参数的基元，如map或filter，将不接受非基元程序
+(即由该解释器从lambda表达式中创建的那些）。
+这在第249页的练习5.5中有所涉及。
+8 宏的真正问题是它们可能会引入绑定，而这些绑定可能会无意中与现有的绑定相冲突，从而使它们在指代上不透明。有几个针对指代不透明问题的攻击，导致了Scheme卫生宏系统的发展。见[73，74，8，31]。另外，通过引入特殊形式对语言进行大幅度的修改，使得读者更难理解程序--读者必须在阅读使用这些形式的程序之前学习新的特殊形式。
+9MIT/GNU Scheme允许为定义提供一种更通用的语法，对define形式的cadr进行递归扩展（见第383页）。我们在这里不这样做。
+10 我们在这里做了一个决定，限制了未来的扩展。我们要求过程参数是一个与操作数列表相同长度的列表，这意味着我们不能扩展这个g:apply处理程序以允许带有可选参数或其余参数的过程。所以我们不能定义传统的Lisp +，它需要一个未指定数量的参数并将它们相加！但是请看练习5.2。但请看练习5.2。
+11 在Scheme中，一个在明确声明的参数之后接受所有参数的参数被称为其余参数。如果有明确声明的参数，我们可以使用一个不恰当的列表（一连串的对，其中最后一个cdr不是空列表）作为我们的参数列表。例如（lambda (a b . c) ...）是一个至少需要两个参数的过程，这些参数将被绑定到a和b上；任何提供的额外参数（在前两个参数之后）
+如果没有明确声明的参数，只有一个休息参数，我们就用一个符号来作为休息参数的名称。例如，在Scheme中我们可以写(lambda xs ...)来定义一个过程，该过程接受任意数量的参数，并将参数xs绑定为参数列表。
+12 在本书的网站上可以找到这样一个infix解析器。
+13 你可能会注意到，这个除非的定义与许多Lisp语言使用的定义不同，包括标准Scheme[109]和Emacs Lisp。
+14 通常的做法是用 "懒惰评估 "这个词来表示参数的评估被推迟，结果被记忆化。在这里，我们把这些概念分开，用懒惰来表示只是推迟。
+15 在Algol-60中逐名参数的最初实现中，这些表达式和环境的组合被称为thunks。因为Scheme程序通常使用没有正式参数的程序来打包一个表达式，以便以后在其他环境中进行评估，所以我们也把这种以这种方式使用的空程序称为thunks。
+16 过程 advance-memo! 还会将指针从被推迟的对象丢到其评估的环境中，如果没有其他指针指向该环境，就允许该环境被垃圾回收。
+17 Dan Friedman和David Wise的一篇古老但重要的论文，题为 "Cons不应该评估它的参数"[40]，展示了懒惰的函数式编程如何强大，但很容易使用kons而不是cons获得。
+18 Scheme [109] 提供了实现流的延迟和力。关于流的更多信息见SICP[1]和SRFI-41[13]。
+19 这个评价器与之前的评价器有很大的不同，所以正如第236页的脚注3所提到的，我们使用一个新的前缀（x:，代表 "eXecution procedure"）来识别类似的程序。
+20 在Lisp（以及Scheme）中，提取引文的文本很简单--它只是一个cadr--但我们的目的是要有足够的通用性来适应任何语言的语法。在大多数语言中，提取引文的文本要难得多。
+21 在analyze-begin中，reduce-right过程永远不会使用#f参数，因为只有当表达式列表为空时才会访问#f。但是这将在还原开始之前发出错误的空序列信号。
+22 Erik Sandewall对支持 "非单调 "推理工具的系统的调查[107]提供了比我们在这里能提供的更多背景。
+23 在这个评价器中，我们使用a:前缀（代表amb ）来区分类似的程序，如第260页的脚注19所解释。
+24 我们对amb的实现与麦卡锡所设想的想法不太一样。他的amb是 "有先见之明 "的，因为它将收敛到一个值，即使其中一个替代品出现了偏差。由于我们的求值器是从左到右，从深到浅的搜索，如果e是一个发散的表达式（无限计算或发出错误信号），我们的（amb e 5）也会发散；但是McCarthy的amb会返回5。威廉-克林格（William Clinger）[21]对此做了很好的解释。
+25 这些时间是由底层Scheme系统解释的嵌入式探索-行为解释器本身的时间。如果我们使用Scheme编译器来编译嵌入式解释器，我们会得到大约30倍的速度提升。
+26 延续传递式的思想是由计算机语言理论家提出的，以澄清计算机语言的语义。关于这一思想的完整历史，请参见[103]。在Scheme中，作为子表达式基础的延续被暴露为第一类程序[120, 61, 109]。
+27 这种控制状态不能与系统的完整状态相混淆。完整状态是所有需要的信息，与程序一起，决定一个计算的未来。它包括所有可改变的变量和数据的当前值。
+延续并没有捕捉到可改变的变量和数据的当前值。
+28 但要注意的是，Scheme报告[109]允许连续体接受任何数量的参数。
+29 见 "The Hunting of the Snark"，作者刘易斯-卡罗尔，1876年。
+30 这个例子改编自维基百科[25]。
+31 使用MIT/GNU方案的扩展内继续程序，在这里近似等同于调用(k (alternative))，可以防止捕获控制栈中对正确继续计算没有必要的部分。

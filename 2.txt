@@ -1,0 +1,839 @@
+ 2 特定领域的语言 在编程项目中建立灵活性的一个强有力的策略是创建一个特定领域的语言，以捕捉将要开发的程序的主题的概念结构。特定领域的语言是一种抽象的语言，其中的名词和动词都与问题领域直接相关。这样的语言允许直接用领域的术语来编写应用程序。就其性质而言，特定领域的语言实现了一个相当完整的领域模型，超过了一个特定应用的需要。1 虽然这看起来像是对手头的特定问题并不重要的额外工作，但它往往比编写一个单一的程序要少，而且所产生的程序更容易修改、调试和扩展。
+因此，建立一个特定领域的语言层，不仅仅是为了支持一个特定程序的开发。它为构建各种共享话语领域的相关程序提供了一个通用框架。它简化了在该领域扩展现有应用程序的过程。它还提供了一个允许相关程序合作的底层。
+在本章中，我们首先介绍了组合器系统，这是一种强大的组织策略，用于建立特定领域的语言层。我们将通过展示如何将用于字符串匹配的正则表达式的丑陋混乱重新表述为嵌入Scheme中的漂亮的基于组合器的特定领域语言来证明这一策略的有效性。但有时我们有一些组件并不容易融入一个干净的系统--有时我们需要一个适配器系统。我们用一种特定领域的语言来说明这一点，这种语言可以为程序制作单元转换包装器，使假设一个单元系统而编写的程序可以用于不同的单元系统。最后，我们考虑了棋盘游戏这个广泛的领域。我们看到，通过建立一个游戏规则的解释器来抽象出该领域的细节是如何可能的。
+
+2.1 组合器 生物系统通过使用非常通用的部件（单元）来实现其大部分的适应性，这些部件是动态配置的，因此能够随着环境的变化而调整。
+计算系统通常不使用这种策略，而是依赖于定制部件和组合的层次结构。近年来，大型的规范化的高级部件库提高了这一活动的抽象水平。但是，除了作为 "模式 "之外，组合的手段很少被抽象或共享。2 在某些情况下，我们可以通过简单的策略来改善这种做法，促进共享组合机制的使用。
+如果我们构建的系统是由 "混搭 "组件家族的成员组成的，这些组件组合起来就会成为该家族的新成员，那么需求的扰动有时可以通过组件的重新排列来解决。
+一个组合器系统是一组原始部件和一组组合部件的手段，从而使组合的接口规格与原始部件的接口规格相同。这样就可以在各部分之间没有意外的相互作用的情况下进行构建。类似组合器系统的一个典型例子是TTL[123]，它是一个历史悠久的标准部件和组合的图书馆，用于构建复杂的数字系统。
+组合器系统为特定领域的语言提供了一种设计策略。系统的元素是语言中的词，而组合器用来将它们组合成短语。组合器系统有一个显著的优势，即它们易于构建和推理，但它们也有局限性，我们将在3.1.5节中讨论。当它们适合这个领域时，它们是一个很好的战略选择。
+但是，我们如何安排通过组合混搭组件家族的元素来构建我们的系统呢？我们必须确定一组原始组件和一组组合器，这些组合器将组件组合起来，从而使复合组件具有与原始组件相同的接口。这样的组合器集合有时是明确的，但更多时候是隐含的，在数学符号中。
+
+2.1.1 函数组合器 数学中使用函数符号是一门组合器学科。一个函数有一个域，它的参数是从这个域中选择的，还有一个它可能的值的范围（或称码域）。有一些组合器可以产生新的函数作为其他函数的组合。
+例如，函数f和g的组合f○g是一个新的函数，它接受g域中的参数并产生f的子域中的值。如果两个函数具有相同的域和子域，并且如果算术被定义在它们共同的子域上，那么我们可以将函数的和（或积）定义为：当给定它们共同域中的一个参数时，是两个函数在该参数上的值的和（或积）。允许头等程序的语言提供了一种机制来支持这种组合方式，但真正重要的是一个好的组合器系列。
+围绕组合器组织一个系统有几个优点。
+所做的部分可以任意地混合和匹配。任何组合都会产生一个合法的程序，其行为透明地只取决于部件的行为和它们的组合方式。一个部件出现的环境并不改变该部件的行为：拿起一个复合部件在一个新的环境中使用它总是可以接受的，而不用担心它在那个环境中的行为。因此，这样的程序容易编写，容易阅读，也容易验证。建立在组合器上的程序是可扩展的，因为引入新的部分或新的组合器并不影响现有程序的行为。
+我们可以把函数组合器看作是实现了接线图，它规定了一个函数是如何通过组合其部件而建立的。
+例如，函数组合表示一个由两个子盒组成的盒子，这样第一个子盒的输出就会反馈给第二个子盒的输入，如图2.1所示。一个实现这个想法的程序是直接的。
+
+(define (compose f g)
+(lambda args
+(f (apply g args))))
+
+图2.1 函数f和g的组合f ◦g是一个新的函数，由这个 "接线图 "定义。g的输出被传递给f，然后它产生f ◦g的输出。
+(如果我们想检查数位是否匹配，就会变得更刺激：过程f所代表的函数只需要一个参数，以匹配g的输出。如果g可以返回多个值，而f必须接受这些参数，那就更有趣了。我们可能还想检查传递给组合的参数对g来说是正确的数量。） 我们可以用一个简单的例子来演示组合。
+
+((compose (lambda (x) (list ’foo x))
+(lambda (x) (list ’bar x)))
+’z)
+(foo (bar z))
+
+有时，命名被组合器返回的过程会更好。例如，我们可以把compose写成
+
+(define (compose f g)
+(define (the-composition . args)
+(f (apply g args)))
+the-composition)
+
+The-composition这个名字没有在compose定义的范围之外被定义，所以这样写compose过程没有明显的优势。我们经常在程序中使用由lambda表达式定义的匿名程序，如上面compose的第一个版本。所以选择怎样写程序主要是一个风格问题。3 即使只用这个compose组合器，我们也可以写出一些相当优雅的代码。考虑一下计算函数f(x)=f(f-1 (x))的第n个迭代的问题。我们可以把它优雅地写成一个程序。
+
+(define ((iterate n) f)
+(if (= n 0)
+identity
+(compose f ((iterate (- n 1)) f))))
+(define (identity x) x)
+
+((iterate n) f)的结果是一个新的函数，与f的类型相同，可以在可以使用f的地方使用。所以(iterate n)本身就是一个函数组合器。现在我们可以用它来确定一个数字重复平方的结果。
+
+(((iterate 3) square) 5)
+390625
+
+注意这个类比：函数组合就像乘法，所以函数迭代就像指数化。
+有许多简单的组合器在编程中普遍有用。我们在这里只介绍几个，让大家感受一下可能性的范围。
+我们可以安排并行使用两个函数，然后用指定的组合器函数组合它们的结果（见图2.2）。
+这种并行组合是通过以下程序实现的
+
+图2.2 在并行组合中，函数f和g取相同数量的参数。"并行组合 "的输入被传递给它们两个。然后，它们的输出由两个参数的函数h合并。
+
+(define (parallel-combine h f g)
+(define (the-combination . args)
+(h (apply f args) (apply g args)))
+the-combination)
+((parallel-combine list
+(lambda (x y z) (list ’foo x y z))
+(lambda (u v w) (list ’bar u v w)))
+’a ’b ’c)
+((foo a b c) (bar a b c))
+
+并行组合器在组织一个复杂的过程中是很有用的。例如，假设我们有一个蔬菜片的图像源。我们可能有一个程序，给定的图像可以估计蔬菜的颜色，另一个程序可以给出形状的描述（叶子、根、茎...）。我们可能有第三个程序，可以结合这些描述来识别蔬菜。这些都可以用平行组合（parallel-combine）来整齐地组成。
+
+Arity 有一些我们在编程中可以使用的组合器家族，是我们通常不会想到的。其中许多出现在常见的数学背景中。例如，张量是线性代数对具有多个参数的线性算子的一种扩展。但这个想法比这更普遍：两个程序的 "张量组合 "只是一个新的程序，它采取了一个数据结构，结合了两个程序的参数。它将这些参数分配给两个过程，产生一个数据结构，将两个过程的值结合起来。在编程中，需要将一个数据结构拆开，分别对各部分进行操作，然后将结果重新捆绑，这种情况无处不在。图2.3中的接线图显示了spread-combine。它是多线性代数中张量积的一个泛化。在数学上的张量积中，f和g是其输入的线性函数，而h是对一些共享索引的追踪；但张量只是启发这个组合器的特殊情况。
+
+图2.3 在传播-合并中，n+m个参数在函数f和g之间被分割。
+实现分散合并的程序比平行合并要复杂一些，因为它必须将正确的参数分配给f和g。 这里是该代码的初稿。
+
+(define (spread-combine h f g)
+(let ((n (get-arity f)))
+(define (the-combination . args)
+(h (apply f (list-head args n))
+(apply g (list-tail args n))))
+the-combination))
+
+这段代码需要一种方法来确定一个过程需要多少个参数（它的arity），因为它必须挑选出f的参数，然后将其余的参数传递给g。
+这个版本的spread-combine不是很好。最令人震惊的问题是，the-combination可以接受任何数量的参数，所以它没有一个很好定义的数字节数，因此它不能被传递给另一个需要其节数的组合器。
+例如，一个传播-组合的结果不能作为第二个参数f传递给另一个传播-组合。因此，我们必须以某种方式为组合器装饰一个适当的算数。
+这里是第二稿。
+
+(define (spread-combine h f g)
+(let ((n (get-arity f)) (m (get-arity g)))
+(let ((t (+ n m)))
+(define (the-combination . args)
+(h (apply f (list-head args n))
+(apply g (list-tail args n))))
+(restrict-arity the-combination t))))
+
+在这里，返回的过程the-combination已经指定了它的arity，所以它可以作为其他需要arity的组合器的输入。restrict-arity过程接收一个过程，对其进行注释，以便通过get- arity获得其arity，并返回注释的过程。
+这是很好的，但是最好的程序是由偏执狂写的！我们想尽早发现错误。我们希望在错误变得难以定位或造成严重麻烦之前，尽可能早地抓住它们。所以让我们用偏执狂编程风格的断言来注释这段代码，以检查我们的组合是否有正确的参数数量。
+
+(define (spread-combine h f g)
+(let ((n (get-arity f)) (m (get-arity g)))
+(let ((t (+ n m)))
+(define (the-combination . args)
+(assert (= (length args) t))
+(h (apply f (list-head args n))
+(apply g (list-tail args n))))
+(restrict-arity the-combination t))))
+((spread-combine list
+(lambda (x y) (list ’foo x y))
+(lambda (u v w) (list ’bar u v w)))
+’a ’b ’c 'd ’e)
+((foo a b) (bar c d e))
+
+特殊形式的assert只是在其参数没有真值时发出错误信号的一种方便方式。
+写限制性和获取性的一种方法是如下。
+
+(define (restrict-arity proc nargs)
+(hash-table-set! arity-table proc nargs)
+proc)
+(define (get-arity proc)
+(or (hash-table-ref/default arity-table proc #f)
+(let ((a (procedure-arity proc))) ;arity not in table
+(assert (eqv? (procedure-arity-min a)
+(procedure-arity-max a)))
+(procedure-arity-min a))))
+(define arity-table (make-key-weak-eqv-hash-table))
+
+这里我们使用一个哈希表来给程序附加一个 "便条"。4 这是一个向现有对象添加信息的简单技巧，但它取决于被注释对象的唯一性，所以应该谨慎使用。
+如果程序get-arity无法在arity-table中找到一个明确的值，它就会使用底层MIT/GNU Scheme系统的原语来计算一个。这涉及到一些问题，因为这些基元支持一个更普遍的arity概念：一个过程需要一个最小的参数数，并且可以有一个可选的最大参数数。我们的arity代码希望一个arity是一个固定的参数数，因此get-arity不能用于任何其他类型的过程。不幸的是，这排除了像+这样的过程，它可以接受任何数量的参数。改变arity代码以使用更普遍的arity概念会使其复杂化，我们在这里的目标是要有一个清晰的阐述而不是一个普遍的解决方案（见练习2.2）。
+
+练习2.1: Arity repair 我们所介绍的程序compose和parallel-combine并不遵守关于公布组合的arity的要求。因此它们不是我们组合器家族的好公民。修复上面所示的compose和parallel-combine的实现，使它们检查其组件以确保算数是兼容的；它们构造的组合在被调用时检查它是否被赋予了正确的参数数；组合为get-arity正确地公布其算数。
+练习2.2: Arity extension 我们对有用的组合的阐述有缺陷，因为我们展示的arity机制不能处理MIT/GNU Scheme使用的更普遍的arity机制。例如，加法程序，也就是+的值，可以接受任何数量的参数。
+(procedure-arity-min (procedure-arity +)) = 0 
+(procedure-arity-max (procedure-arity +)) = #f
+而正切过程可以接受1或2个参数。
+(procedure-arity-min (procedure-arity atan)) = 1 
+(procedure-arity-max (procedure-arity atan)) = 2
+扩展对arities的处理是有用的，这样组合器就能处理这些更复杂的情况。
+a. 勾勒出如何扩展组合器以使用更一般的算式的计划。请注意，你可能并不总是能够在数位上使用算术。在重新表述传播-组合时，你必须做出哪些选择？例如，需要对spread-combine中的程序f、g和h进行什么样的限制？ 
+b. 应用你的计划并使之全部运作 
+对于任何语言来说，都有基元、组合手段和抽象手段。组合器语言定义了基元和组合手段，从底层编程语言中继承其抽象手段。在我们的例子中，基元是函数，组合方式是组合器compose、parallel-combine、spread-combine，以及我们可能引入的其他组合器。
+
+多重值 注意，平行组合和分散组合是相似的，因为它们都是将组合器h应用于f和g的结果。
+但是我们并没有使用compose来构造这些组合器。为了抽象出这种模式，我们需要能够从f和g的组合中返回多个值，然后将这些多个值作为h的参数。我们可以通过返回一个复合数据结构来实现，但更好的方法是使用Scheme的多值返回机制。考虑到多个值，我们可以将spread- combine定义为两个部分的组合，h和这个f和g的组合：5 
+
+(define (spread-apply f g)
+(let ((n (get-arity f)) (m (get-arity g)))
+(let ((t (+ n m)))
+(define (the-combination . args)
+(assert (= (length args) t))
+(values (apply f (list-head args n))
+(apply g (list-tail args n))))
+(restrict-arity the-combination t))))
+
+
+图2.4 组合器spread-combine实际上是由两部分组成。第一部分，spread-apply，是函数f和g的组合，有正确的参数路由到它们。第二部分是组合器h，它只是与第一部分组成。这种分解是通过使用Scheme的多值机制实现的。
+下面我们将对compose进行泛化，以便我们可以直接实现图2.4中的抽象，具体如下。
+
+(define (spread-combine h f g)
+(compose h (spread-apply f g)))
+
+这和我们原来的版本有相同的行为：
+
+((spread-combine list
+(lambda (x y) (list ’foo x y))
+(lambda (u v w) (list ’bar u v w)))
+’a ’b ’c 'd ’e)
+((foo a b) (bar c d e))
+
+
+为了使其发挥作用，我们概括了compose，允许多个值在组成的程序之间传递。
+
+(define (compose f g)
+(define (the-composition . args)
+(call-with-values (lambda () (apply g args))
+f))
+(restrict-arity the-composition (get-arity g)))
+
+ 这里compose的第二个参数返回两个值：
+ 
+((compose (lambda (a b)
+(list ’foo a b))
+(lambda (x)
+(values (list ’bar x)
+(list ’baz x))))
+’z)
+(foo (bar z) (baz z))
+ 
+ 现在我们可以进一步概括。我们可以允许所有我们正在组合的函数返回多个值。如果f和g都返回多个值，我们可以将这些值组合成the-combination可以返回的多个值：
+ 
+(define (spread-apply f g)
+(let ((n (get-arity f)) (m (get-arity g)))
+(let ((t (+ n m)))
+(define (the-combination . args)
+(assert (= (length args) t))
+(let-values ((fv (apply f (list-head args n)))
+(gv (apply g (list-tail args n))))
+(apply values (append fv gv))))
+(restrict-arity the-combination t))))
+((spread-combine list
+(lambda (x y) (values x y))
+(lambda (u v w) (values w v u)))
+’a ’b ’c 'd ’e)
+(a b e d c)
+ 
+ 唯一的限制是，返回的数值总数必须与h的算数相适应。
+
+练习2.3：速成 重新设计parallel-combine，使其成为两个部分的组合，并允许各部分返回多个值。
+一个小型库 许多常见的使用模式可以被捕获为组合器，并且经常使用这种技术构建非常漂亮的程序。暴露和抽象这些常见的模式对我们是有利的。这里还有一些需要思考的问题。
+通常我们有一个接口，它的通用性超过了在特定情况下的需要。在这种情况下，我们可能想保留接口，但调用一些更专门的过程，而这些过程不需要我们在一般情况下可以提供的所有参数；所以我们选择制作一个专门过程的版本，忽略一些参数。
+过程discard-argument接收要被抛弃的参数的索引i，并返回一个组合器。这个组合器接收一个n个参数的函数f，并返回一个新的函数the- combination of n + 1 arguments，该函数将f应用于从n + 1个给定参数中删除第i个参数后得到的n个参数。图2.5说明了这个想法。这个组合器的代码是。
+
+图2.5 组合器（discard-argument 2）接收一个三参数的函数f，并生成一个有四个参数的新函数，该函数忽略其第三个参数（i=2），并将其余参数传递给f。
+
+
+(define (discard-argument i)
+(assert (exact-nonnegative-integer? i))
+(lambda (f)
+(let ((m (+ (get-arity f) 1)))
+(define (the-combination . args)
+(assert (= (length args) m))
+(apply f (list-remove args i)))
+(assert (< i m))
+(restrict-arity the-combination m))))
+(define (list-remove lst index)
+(let lp ((lst lst) (index index))
+(if (= index 0)
+(cdr lst)
+(cons (car lst) (lp (cdr lst) (- index 1))))))
+(((discard-argument 2)
+(lambda (x y z) (list ’foo x y z)))
+’a ’b ’c 'd)
+(foo a b d)
+
+我们可以把这个组合器推广到丢弃多个参数。
+与丢弃参数的情况相反的情况也经常发生。在图2.6中，我们看到了一个专门化过程的接线图，它事先指定了所有的参数，只留下一个参数在调用时传递。这在传统上被称为currying，以纪念逻辑学家Haskell Curry，他是组合逻辑的早期研究者。7 图2.6 组合器((curry-argument 2) 'a 'b 'c)指定了四参数函数f的三个参数，留下第三个参数(i=2)在调用结果的单参数函数时被提供。
+curry-argument的代码没有带来任何惊喜：
+
+(define ((curry-argument i) . args)
+(lambda (f)
+(assert (= (length args) (- (get-arity f) 1)))
+(lambda (x)
+(apply f (list-insert args i x)))))
+(define (list-insert lst index value)
+(let lp ((lst lst) (index index))
+(if (= index 0)
+(cons value lst)
+(cons (car lst) (lp (cdr lst) (- index 1))))))
+((((curry-argument 2) ’a ’b ’c)
+(lambda (x y z w) (list ’foo x y z w)))
+'d)
+(foo a b d c)
+
+注意，在这里我们不需要使用限制性，因为返回的过程正好有一个参数。8 在练习2.5中，我们对这个组合器进行了概括，以便为咖喱提供多个参数。
+有时我们想使用一个库中的过程，它的参数顺序与我们在当前应用程序中使用的标准不同。与其为该过程做一个特殊的接口，我们可以使用一个一般的置换过程来重新排列，如图2.7所示。这个程序也很简单，但是请注意，从组合器返回并在args上实际运行的过程the-combination不需要解释排列规范--这在围绕the-combination的let中完成一次，并在其中提到。一般来说，这样写代码可以通过早期计算进行一些深度优化，即使是在非常晚的绑定情况下也是如此。图2.7 组合器（permute-arguments 1 2 0 3）接收一个有四个参数的函数f，并产生一个有四个参数的新函数，该函数在将参数传递给f之前根据提供的permutation对参数进行了permutation。
+
+
+(define (permute-arguments . permspec)
+(let ((permute (make-permutation permspec)))
+(lambda (f)
+(define (the-combination . args)
+(apply f (permute args)))
+(let ((n (get-arity f)))
+(assert (= n (length permspec)))
+(restrict-arity the-combination n)))))
+(((permute-arguments 1 2 0 3)
+(lambda (x y z w) (list ’foo x y z w)))
+’a ’b ’c 'd)
+(foo b c a d)
+
+程序make-permutation很简单，但效率不高：
+
+(define (make-permutation permspec)
+(define (the-permuter lst)
+(map (lambda (p) (list-ref lst p))
+permspec))
+the-permuter)
+
+2.1.2 组合器和身体计划
+
+这个故事的一个寓意是，由组合器的组合组成的结构是一个身体计划，很像动物的身体计划或像超外差无线电接收器的工程模式（第10页图1.1）。考虑一下组成组合器。它提供了一个局部的安排，即程序f和g。这些局部由一个标准的互连来连接，但这是对f和g的全部要求。事实上，这些组件可以是任何能够接受正确数量的参数并能返回正确数量的值的东西。因此，组合器是组织原则，就像Hox基因一样：它们指定了区域和它们的关系，而没有规定每个区域内发生什么。
+练习 2.4: 作为组合？
+你可能已经注意到，由discard-argument、curry-argument和permut-arguments组成的组合器可以被认为是一个参数操作和一个过程的组合。使用多值返回机制将这些组合器重新构建为组合。
+练习 2.5: 有用的组合器 
+现在是时候让这个小库更完整一些了。
+a. 组合器discard-argument和curry-argument可以被泛化，以允许忽略或预处理一个以上的参数。为permute-arguments指定permutation的方法似乎是一种相当普遍的方法，通过它们在调用中的顺序来指定参数（基于零）。构建这些程序的通用版本，它们有这样一个接口。把它们命名为discard-arguments和curry-arguments。使你的代码与文本中的代码兼容：你的( curry-arguments 2)应该完全做(curry-argument 2)做的事情。
+b. 你还会发现哪些组合器是有用的？编一个清单，其中包括你在实际代码中可能遇到的适当的用例。为你的库编写它们的实现。
+c. 进一步概括compose，使它可以接受任何数量的函数参数。表达式（compose f g h）等同于（compose f（compose g h））。注意，它也应该等同于（compose (compose f g) h）。要小心：什么是零参数的组合？
+
+2.2 正则表达式
+正则表达式被广泛用于字符串匹配。尽管正则表达式系统是从一个非常好的数学形式主义中派生出来的，但是实现者为了将形式主义扩展到有用的软件系统中而做出的特殊选择往往是灾难性的：所采用的引号惯例非常不规范；滥用小括号，无论是用于分组还是用于后向引用，都是一个令人震惊的奇迹。此外，试图增加表达能力和解决早期设计的缺陷导致了不兼容的衍生语言的大量出现。
+从表面上看，正则表达式看起来像一种组合器语言，因为表达式片段可以被组合成更复杂的表达式。但是一个片段的含义在很大程度上取决于它所嵌入的表达式。例如，如果我们想在一个括号表达式[...]中加入一个省略号∧，省略号一定不能出现在第一个字符的位置，因为如果省略号出现在第一个字符之后，它只是一个普通的字符，但是如果它作为第一个字符出现，就否定了括号表达式的意义。
+因此，一个括号表达式不可能只包含一个省略号。
+因此，正则表达式语言的语法是很糟糕的；有各种不兼容的语言形式；而且引号惯例也很糟糕[原文如此]。虽然正则表达式语言是特定领域的语言，但它们是糟糕的语言。研究正则表达式的部分价值在于体验事情可能有多糟糕。
+然而，有大量有用的软件，例如grep，使用正则表达式来指定所需的行为。
+我们将发明一种更好的用于指定正则表达式的特定领域的组合器语言，以及一种将这种语言翻译成传统正则表达式语法的方法。我们将使用POSIX基本正则表达式（BRE）语法作为我们翻译器的目标[96]，因为它是大多数其他正则表达式语法的一个子集。POSIX还定义了一个更强大的扩展正则表达式（ERE）语法，我们将在一个练习中考虑这个语法。
+有了这个机器，我们就可以在Scheme环境中使用grep等系统的功能。我们将拥有组合器语言的所有优势。它将有一个干净的、模块化的描述，同时保留了使用现有工具的能力。这门语言的用户将没有什么好贪婪的，除非他们重视简洁的表达而不是可读性。
+与任何语言一样，有基元、组合的手段和抽象的手段。我们的语言允许构建一些模式，像grep这样的工具可以与字符串数据相匹配。由于这种语言嵌入了Scheme，我们继承了Scheme的力量：我们可以使用Scheme结构来组合模式，并使用Scheme程序来抽象它们。
+
+2.2.1 正则表达式组合语言 模式是由这些原始模式建立的。
+(r:dot) 匹配除换行之外的任何字符 
+(r:bol) 只匹配一行的开头
+(r:eol) 只匹配一行的结尾 
+(r:quote string) 匹配字符串 
+(r:char-from string) 匹配字符串中的一个字符 
+(r:char-not-from string) 匹配不在字符串中的一个字符 
+模式可以组合成复合模式。
+(r:seq pattern ...) 这个模式从左到右依次匹配每个参数模式。
+(r:alt pattern ...) 这个模式从左到右尝试每一个参数模式，直到其中一个选项匹配。如果没有一个匹配，那么这个模式就不匹配。
+(r:repeat min max pattern) 这个模式试图与参数模式匹配最少的min次，但不超过最多的max次。如果max被指定为#f，那么就没有指定最大次数。如果max等于min，那么给定的模式必须精确匹配该次数。
+下面是一些模式的例子：
+(r:seq (r:quote "a") (r:dot) (r:quote "c")) 
+匹配任何以a开始，以c结束的三个字符的字符串。例如，它将匹配abc和aac以及acc。
+(r:alt (r:quote "foo") (r:quote "bar") (r:quote "baz")) 匹配foo, bar, 或 baz。
+(r:repeat 3 5 (r:alt (r:quote "cat") (r:quote "dog")) 匹配catdogcat和catcatdogdog以及dogdogcatdogdog，而不是catcatdogdogdog。
+我们将把模式实现为Scheme表达式。因此，我们可以自由地将它们与任何Scheme代码混合在一起，使我们拥有编程语言的所有力量。
+
+
+2.2.2 翻译器的实现 让我们来看看这种语言是如何实现的。正则表达式将被表示为POSIX基本正则表达式语法中的字符串。
+
+(define (r:dot) ".")
+(define (r:bol) "∧")
+(define (r:eol) "$")
+
+这些直接对应于正则表达式语法。
+接下来，r:seq实现了一种将给定的正则表达式片段集作为一个独立元素的方法：
+
+(define (r:seq . exprs)
+(string-append "\\(" (apply string-append exprs) "\\)"))
+
+在结果中使用小括号将给定的表达式片段的内容从周围的环境中分离出来。不幸的是，在翻译后的输出中使用 \ 是必要的。在基本的正则表达式中，小括号字符被视为自引号字符。在这里，我们需要它们作为分组操作，这可以通过在每个括号前面加上反斜杠来实现。雪上加霜的是，当这个正则表达式被放到Scheme字符串中时，有必要用另一个反斜杠来引用每个反斜杠字符。所以我们的例子（r:seq (r:quote "a") (r:dot) (r:quote "c")）转化为 \(\(a\).\(c\)\)，或者作为一个Scheme字符串"\(\(a\).\(c\)\)"。唉。
+r:quote的实现有点困难。在正则表达式中，大多数字符都是自我引用的。然而，有些字符是正则表达式的操作符，必须明确引号。我们用r:seq来包装结果，以保证被引号的字符串是自包含的。
+
+(define (r:quote string)
+(r:seq
+(list->string
+(append-map (lambda (char)
+(if (memv char chars-needing-quoting)
+(list #\\ char)
+(list char)))
+(string->list string)))))
+(define chars-needing-quoting
+’(#\. #\[ #\\ #\∧ #\$ #\*))
+
+为了实现替代的子表达式，我们在子表达式之间插入一个竖条，并使用r:seq包装结果：
+
+(define (r:alt . exprs)
+(if (pair? exprs)
+(apply r:seq
+(cons (car exprs)
+(append-map (lambda (expr)
+(list "\\|" expr))
+(cdr exprs))))
+(r:seq)))
+(r:alt (r:quote "foo") (r:quote "bar") (r:quote "baz")) 翻译为\(\(foo\)\|(bar\)\|(baz\)\)。除了引用小括号字符外，我们还必须引用竖条字符，否则它在这个语法中是一个自我引用的字符。请注意，与这里支持的其他正则表达式不同，BRE语法不支持替代表达式：它们是GNU grep定义的一个扩展，被许多实现所支持。(替代表达式由ERE语法支持。）通过使用给定正则表达式的副本来实现重复是很简单的：
+
+(define (r:repeat min max expr)
+(apply r:seq
+(append (make-list min expr)
+(cond ((not max) (list expr "*"))
+((= max min) ’())
+(else
+(make-list (- max min)
+(r:alt expr "")))))))
+
+这生成了expr的最小副本，后面是（-max min）的可选副本，其中每个可选的副本是表达式的一个替代物和一个空表达式。如果没有最大，9表达式后面有一个星号，可以匹配任意数量的次数。所以（r:repeat 3 5 (r:alt (r:quote "cat") (r:quote "dog"))）翻译成大的东西，可能会导致读者的癫痫发作。
+r:char-from和r:char-not-from的实现由于需要巴洛克式的引号而变得复杂。这最好分成两部分，第一部分是处理它们之间的差异，第二部分是处理它们共同的报价：
+
+(define (r:char-from string)
+(case (string-length string)
+((0) (r:seq))
+((1) (r:quote string))
+(else
+(bracket string
+(lambda (members)
+(if (lset= eqv? ’(#\- #\∧) members)
+’(#\- #\∧)
+(quote-bracketed-contents members)))))))
+(define (r:char-not-from string)
+(bracket string
+(lambda (members)
+(cons #\∧ (quote-bracketed-contents members)))))
+(define (bracket string procedure)
+(list->string
+(append ’(#\[)
+(procedure (string->list string))
+’(#\]))))
+
+ 
+ r:char-from的特殊情况特别处理了空的和单子的字符集，这简化了一般情况。还有一个特殊情况是只包含粗体字和连字符的集合。但是r:char-not-from没有这种特殊情况。
+一般情况下，处理括号内有特殊意义的三个字符的引号，是将它们放在不是运算符的位置上。(我们告诉过你这很难看! ) 
+
+(define (quote-bracketed-contents members)
+(define (optional char)
+(if (memv char members) (list char) ’()))
+(append (optional #\])
+(remove
+(lambda (c)
+(memv c chars-needing-quoting-in-brackets))
+members)
+(optional(optional#\∧)
+#\-)))
+(define chars-needing-quoting-in-brackets
+’(#\] #\∧ #\-))
+
+为了测试这个代码，。我们可以打印出相应的grep命令，并使用剪切和粘贴在shell中运行它。因为不同的shell使用不同的引用约定，我们不仅需要引用正则表达式，还需要选择使用哪个shell。Bourne shell是无处不在的，它有一个相对简单的引用约定。
+
+(define (write-bourne-shell-grep-command expr filename)
+(display (bourne-shell-grep-command-string expr filename)))
+(define (bourne-shell-grep-command-string expr filename)
+(string-append "grep -e "
+(bourne-shell-quote-string expr)
+" "
+filename))
+
+Bourne引语惯例使用单引号字符围绕字符串。引述字符串中除单引号以外的任何内容，单引号是引号字符串的结束。因此，要引用一个单引号字符，我们必须结束字符串，用反斜杠明确地引用单引号，然后开始另一个引号字符串。shell将这种串联解释为一个单一的标记。(我们有乐趣了吗？) 
+
+(define (bourne-shell-quote-string string)
+(list->string
+(append (list #\’)
+(append-map (lambda (char)
+(if (char=? char #\’)
+(list #\’ #\\ char #\’)
+(list char)))
+(string->list string))
+(list #\’))))
+
+这个故事的寓意
+ 
+我们的翻译器非常复杂，因为大多数正则表达式都不能合成更大的正则表达式，除非采取极端措施来隔离各部分。我们的翻译器做了这项工作，但结果是它生成的正则表达式有很多不必要的模板。人类不会这样写正则表达式，因为他们只在必要的地方使用模板--但他们经常会错过有必要使用模板的情况，导致难以发现的错误。
+这个故事的寓意是，正则表达式是一个美丽的例子，说明了如何不构建一个系统。使用可组合的部分和组合器，通过组合其他部分来制造新的部分，可以带来更简单和更健壮的实现。
+
+练习2.6：在正则表达式中添加*和+ 在传统的正则表达式语言中，子模式后面的星号（*）操作符意味着该子模式的零或多份。该语言的一个常见扩展是添加加号（+）运算符。一个子模式后面的加号意味着该子模式的一个或多个副本。
+定义Scheme程序r:*和r:+来获取一个模式，并根据需要进行迭代。这可以用r:repeat来完成。
+在复杂模式的真实数据上演示你的程序。
+练习2.7：一个错误、一个坏笑话、两个调整和一个启示 
+Ben Bitdiddle注意到我们的(r:repeat min max expr)的实现有一个问题。
+在r:repeater程序的结尾处使用(r:alt expr "")的做法有点不妥。这个代码片段翻译成了 \(expr\|\)，其中expr是expr的值。这有赖于这样一个事实，即 "有 "和 "无 "的交替相当于说 "一个或没有"。(我们将在接下来的解释中省略必要的但令人困惑的反斜线)。就是说。(expr|)表示一个或没有expr的实例。不幸的是，这取决于GNU对REs的正式POSIX标准的一个无记载的扩展。
+具体来说，POSIX标准10的第9.4.3节规定，紧接在封闭小括号之前（或紧接在开放小括号之后）出现的垂直线会产生未定义的行为。从本质上讲，RE不能是一个空序列。
+GNU grep在遇到(x|)时刚好 "做了正确的事情"。并非所有的grep实现都是如此宽容的。
+因此，Ben要求他的三个代码黑客团队（Louis、Alyssa和Eva）提出其他解决方法。最终，他提出了他自己的补丁，你将实施它。
+Louis Reasoner建议，一个简单、优雅的修复方法是将代码片段（r:alt expr ""）替换为直接调用（r: repeat 0 1 expr）。
+Alyssa P. Hacker建议重写r:repeat的else子句，将( r:repeat 3 5 x)翻译成等同于(xxx|xxxx|xxxxx)，而不是我们的代码产生的不符合POSIX标准的顽皮的xxx(x|)(x|)未定义正则表达式。
+她提到了POSIX正则表达式文档的第9.4.7节。11 Eva Lu Ator指出第9.4.6.412节中的问号（？）运算符，并建议更好的修复方法是实现r:? 运算符，用（r:? expr）代替（r:alt expr "" ）。
+同时，Ben仔细研究了RE规范，并有了新的发现。他建议重新实现r:repeat，以发出区间表达式。见POSIX文档的9.3.6.5节。13 请尽量不要生病。
+让我们来考虑一下每个提议：
+a. 大家都对路易斯的愚蠢的玩笑傻笑起来。这有什么好笑的？就是说，这个想法有什么问题？一句话的打油诗就可以了。
+b. 在代码和数据方面，Eva的建议比Alyssa的有什么优势？简洁而有说服力的几句话就够了。
+c. 本的建议比其他的建议有什么优势？具体来说，思考一下他引用了POSIX文件的哪一节，而其他人引用了哪一节，然后快速浏览一下下面的练习2.10，并考虑其中的含义。另外，考虑一下这段新代码中输出字符串的大小，以及代码的整体清晰度。
+同样，一两句简短的话就足够了。
+d. 按照Ben的建议，重新实现r:repeat，以发出区间表达式。提示：Scheme的number->string过程应该是很方便的。注意事项：小心反斜线。
+展示r:repeat在几个精心挑选的样本输入上产生的输出。在一些复杂模式的真实数据上演示一下你的程序。
+
+练习 2.8: 太多的嵌套 我们的程序产生了过度的嵌套正则表达式：即使在没有必要的情况下也会进行分组。例如，下面这个简单的模式导致了一个过于复杂的正则表达式：
+
+(display (r:seq (r:quote "a") (r:dot) (r:quote "c")))
+\(\(a\).\(c\)\)
+
+另一个问题是，BREs可能涉及反向引用。(见POSIX正则表达式文档的第9.3.6.3节。14)反向引用指的是前面的括号内的子表达式。
+因此，重要的是，括号内的子表达式必须是由模式的作者明确放置的。(Aargh! 这是我们听过的最糟糕的想法之一--分组，这对迭代是必要的，但却与命名混淆了，以便以后参考！) 
+要做的。编辑我们的程序，尽可能多地消除不必要的嵌套。请注意。这里有一些微妙的情况，你必须要注意。什么是这种情况？展示你对我们程序的更好版本，并说明它是如何处理这些微妙情况的。
+提示：我们的程序使用字符串作为它的中间表示，也使用它的结果。你可以考虑使用一个不同的中间表示法。
+练习2.9: 反向引用 添加一个构造反向引用的程序。(见练习2.8。)享受对BREs感到困惑的乐趣。
+练习2.10：标准？
+
+关于标准的最好的事情就是有这么多可以选择的标准。
+Andrew S. Tannenbaum
+
+除了基本正则表达式（BREs）之外，还有扩展正则表达式（EREs），在POSIX正则表达式文档[96]中定义。一些软件，例如egrep，使用这种版本的正则表达式。不幸的是，ERE并不是BREs的保守扩展。ERE 语法实际上与 BRE 语法不一致! 扩展我们的Scheme模式语言，使目标可以是BREs或EREs，这是一个有趣的项目。
+a. BREs和EREs之间有什么显著的区别，使之成为一种痛苦？列出必须解决的差异。
+b. 我们的翻译器如何能够被事实化，从而使我们的语言能够翻译成任何一种正则表达式，这取决于需要什么？我们怎样才能保持独立于目标正则表达式语言的抽象层？解释一下你的策略。
+c. 实施你在b部分中设计的策略。通过确保你可以运行egrep和grep，并在测试你在a部分中发现的差异的情况下有相同的结果来证明你的工作。
+
+2.3 封装器 有时我们可以通过封装现有程序而不是重写它来重新利用它。考虑一下计算气体球体的半径如何随温度变化而变化的问题，保持压力不变。理想气体定律是
+
+PV=nRT
+
+其中P是压力，V是体积，n是气体的量，R是气体常数，T是温度。所以体积的计算方法是
+
+(define (gas-law-volume pressure temperature amount) (/ (* amount gas-constant temperature) pressure)) (define gas-constant 8.3144621) ;J/(K*mol)
+
+球体半径的计算方法是
+
+(define (spheres-radius volume) (expt (/ volume (* 4/3 pi)) 1/3)) (define pi (* 4 (atan 1 1)) 
+
+(注意：4/3和1/3是有理常数-斜线不是一个英数分割运算符。) 气体常数的选择使这个程序使用了国际单位，所以压力的单位是牛顿/平方米，温度的单位是开尔文，数量的单位是摩尔，体积的单位是立方米，半径的单位是米。
+这看起来很简单，但使用其他单位会使事情变得复杂。假设我们想用华氏度测量温度，用磅/平方英寸测量压力，用英寸测量半径。确定正确的公式比计算数字答案更复杂。我们可以修改简单的公式以考虑到单位，但这掩盖了程序的想法，并使其专门用于特定的问题。另外，我们可以安排一个模块化的方式来转换单位。
+一个单位转换是一个与它的反向相联系的程序。我们可以写出常规单位之间的温度转换，比如华氏温度和摄氏温度，以及SI和常规单位之间的转换。
+
+(define fahrenheit-to-celsius (make-unit-conversion (lambda (f) (* 5/9 (- f 32))) (lambda (c) (+ (* c 9/5) 32))))
+
+
+(define celsius-to-kelvin (let ((zero-celsius 273.15)) ;kelvins (make-unit-conversion (lambda (c) (+ c zero-celsius) ) (lambda (k) (- k zero-celsius )))))
+
+我们可以使用unit:invert访问反转程序。例如，
+
+(fahrenheit-to-celsius -40)
+-40
+(fahrenheit-to-celsius 32)
+0
+((unit:invert fahrenheit-to-celsius) 20)
+68
+
+我们可以组成单位转换：
+
+((compose celsius-to-kelvin fahrenheit-to-celsius) 80)
+299.81666666666666
+
+并且我们可以定义复合单位转换。15 
+
+(define psi-to-nsm (compose pound-to-newton (unit:invert inch-to-meter) (unit:invert inch-to-meter))
+
+所以现在我们可以计算出，在68◦F和14.7psi条件下，1摩尔理想气体所占据的球体半径，单位是英寸。
+
+((unit:invert inch-to-meter)
+(sphere-radius
+(gas-law-volume
+(psi-to-nsm 14.7)
+((compose celsius-to-kelvin fahrenheit-to-celsius) 68)
+1)))
+7.049624635839811
+
+这是个烂摊子! 这种单位转换的实现，虽然编程简单，但很难读，也很难用。另一方面，它很好地分离了几个问题。气体定律的物理学与球体的几何学和测量单位是分开的。物理和几何描述并不杂乱，每一个都很容易阅读。
+我们可以做得更好。我们可以建立一个小型的特定领域语言，其中的领域就是单位。这将简化构建新转换器的工作，并使产生的转换器更易读。
+
+
+2.3.1 专业化包装器 一种方法是建立一个通用的包装器系列，它可以接受像气体法-体积这样的过程，并通过对其输出和输入的单位转换产生该过程的专业版本。
+尽管我们将展示如何为单位转换做这件事，但代码将足够通用，可以为数据的任意转换建立包装器。
+对于手头的问题，我们可以为知道其原始单位（SI）的gas-law-volume程序构建一个特殊化器。这个特殊化器是由一个简单的语言定义的，它被编译成原始单位转换的适当组合。这有点像一个组合器系统，只是组合器是由编译器根据高级规范生成的。
+我们将在第四章再次看到这种技术，在那里我们用它来编译来自模式匹配程序的组合。
+
+(define make-specialized-gas-law-volume (unit-specializer gas-law-volume '(expt meter 3) ; output (volume) '(/ Newton (expt meter 2)) ; pressure 'kelvin; temperature 'mole)) ; amount
+
+为了制作一个使用其他单位的gas-law-volume程序版本，我们提供我们想要使用的单位。
+
+(define conventional-gas-law-volume
+(make-specialized-gas-law-volume
+’(expt inch 3)
+’(/ pound (expt inch 2))
+’fahrenheit
+’mole))
+;
+ output (volume)
+;
+ pressure
+;
+ temperature
+;
+ amount
+
+这个过程可以用来产生立方英寸的体积，因此我们可以得到英寸的半径。
+
+
+(sphere-radius (conventional-gas-law-volume 14.7 68 1))
+7.04962463583981
+
+2.3.2 实现特殊化器 我们怎样才能使其发挥作用呢？有两个部分：一个程序unit-specializer，它用必要的单位转换来包装一个给定的程序，还有一个将给定的单位表达式翻译成适当的单位转换的方法。第一部分是
+
+(define (unit-specializer procedure implicit-output-unit
+. implicit-input-units)
+(define (specializer specific-output-unit
+. specific-input-units)
+(let ((output-converter
+(make-converter implicit-output-unit
+specific-output-unit))
+(input-converters
+(map make-converter
+specific-input-units
+implicit-input-units)))
+(define (specialized-procedure . arguments)
+(output-converter
+(apply procedure
+(map (lambda (converter argument)
+(converter argument))
+input-converters
+arguments))))
+specialized-procedure))
+specializer)
+
+程序 unit-specializer 接收一个要专门化的程序和其隐含的本地单位，并返回一个专门化的程序，该程序接收特定单位并创建一个给定程序的专门版本。唯一棘手的部分是确保单元表达式以正确的顺序传递给make-converter。
+解决方案的第二部分是make-converter，它接收两个单位表达式，并返回一个转换过程，将第一个单位的数据转换到第二个单位。对于这个问题，我们将制作一个真正愚蠢的make-converter版本：它将单位表达式视为字面常数，可以用equal? 通过这种简化，make-converter可以使用表格查找适当的转换器，这意味着我们必须明确地提供每一个必要的转换，而不是从原始的单位转换中推导出它们。下面是一个关于如何创建表格的例子。(register-unit-conversion 'fahrenheit 'celsius fahrenheit-to-celsius) (register-unit-conversion 'celsius 'kelvin celsius-to-kelvin) 这注册了我们前面定义的转换。一旦这些转换被注册，我们就可以通过传递给make-converter的参数的顺序来查找任一转换方向。
+然而，我们需要的不是这些转换中的任何一个，而是从华氏温度到开尔文的转换。由于我们不想从现有的定义中推断出这一点--这是一个有趣但更复杂的实现--我们将不得不从现有的定义中建立复合转换。为了使之容易，我们将引入一个单位转换的 "代数"，如下所示。
+
+
+(define (unit:* u1 u2)
+(make-unit-conversion (compose u2 u1)
+(compose (unit:invert u1)
+(unit:invert u2))))
+
+过程unit:*，结合unit:invert，为我们提供了组合单位转换的一般能力。为方便起见，我们将添加以下内容，它们很容易从unit:*和unit:invert中导出。
+
+(unit:/ u1 u2) (unit:expt u n)
+
+有了这个代数，我们可以写出我们想要的转换：
+
+（register-unit-conversion 'fahrenheit 'kelvin (unit: * (register-unit-conversion '(/ pound (expt inch 2)) '(/ newton (expt meter 2)) (unit:/ pound-to-newton (unit:expt inch-to-meter 2)) (register-unit-conversion '(expt inch 3) '(expt meter 3) (unit:expt inch-to-meter 3) 
+
+2. 3.2 适配器 我们在这里展示的是一种可能的技术，即在不改变原程序的情况下，采用现有程序并扩大其适用范围。由此产生的 "适配器 "机制本身是可扩展的，可以用来概括许多其他类型的程序。
+这是一个重要的原则：与其重写一个程序来适应一个新的目的，不如从一个简单而通用的基础程序开始，并对其进行包装，使其专门用于一个特定的目的。程序对包装器一无所知，而包装器对基础程序的假设也很少。而单元专门化程序对两者都知之甚少。因为这些部分是松散耦合的，所以它们都可以被泛化为许多目的，包括那些我们在这里没有想到的目的。这是一种分层策略，我们将在第6章中展开讨论。
+练习2.11：实现单位转换 这里我们要求你填入使这个系统工作的细节。
+a. 作为热身，编写程序 register-unit- conversion 和 make-converter 。
+b. 编写程序 unit:/ 和 unit:expt.
+c. 填写一个常规单位到SI单位的转换库。这需要对质量和长度进行转换。(时间在两个系统中都是以秒为单位。然而，你可能对分钟、小时、天、周、年等感兴趣。不要为了使其通用而陷入困境。）d. 制作一些有用的化合物，如速度和加速度。
+e. 对于一个真正的项目，为其他一些程序的其他数据转换扩展这个特殊器系统，与单位无关。
+f. 另一个大的扩展是建立make-converter，这样它就可以根据需要从以前注册的转换中导出复合转换。这将需要一个图搜索。
+
+
+2.4 抽象一个领域 让我们来看看如何创建一个特定领域的语言层，作为关于棋牌游戏的软件的基础。棋盘游戏有许多共同的特征；每个游戏都结合了其中的一些特征。可以建立一个领域模型，捕捉一类棋类游戏的共同结构，即描述棋类游戏的抽象概念，如棋子、潜在位置、以及移动和捕捉等原始行为。
+一个特定的棋类游戏程序可以完全按照领域模型来构建。如果领域模型有足够的通用性，它将支持未来的变化而不需要改变模型本身。
+让我们考虑一下国际象棋和跳棋等棋类游戏。它们都是在一个矩形网格的棋盘上进行的双人游戏。
+玩家有排列在棋盘上的棋子。棋盘上的任何位置都不会有多于一个棋子。棋手们交替移动。在每一步棋中，玩家选择一个棋子并将其移动到棋盘上的其他位置。有时对手的棋子会被吃掉。这是对一类棋盘游戏的领域模型的非正式描述。
+基于这种领域模型，我们将构建一个跳棋的裁判员，它将计算出棋手在特定游戏状态下的所有合法棋步。该领域模型的实现相当复杂，提供了棋子、坐标和棋盘的实现。为了简化我们的介绍，我们将只限于介绍裁判员所需要的东西。
+裁判员的一般组织结构是，它将分别为每个棋子生成所有的合法棋步，然后将它们汇总。为了做到这一点，有一个抽象概念来跟踪移动棋子的效果是很有帮助的。例如，一个效果可能会改变一个棋子的位置，另一个效果可能会改变其类型（例如跳棋中的 "王"），还有一个效果可能会吃掉对手的棋子。每一步合法的棋都是由适用于该棋的初始状态的这种变化序列组成的。
+一个好的程序必须要写很多次。我们展示的程序也是如此。第一稿可能无法清楚地将关注点分开，但通过编写该稿，程序员了解了问题的结构。我们将展示两种不同的实现方式，这将揭示程序的演变过程，因为我们发现了草案中的缺陷。
+
+
+2.4.1 单一的实现
+
+让我们从一个人可能写的简单版本的裁判员开始，以了解真正要做的事情。
+核对器领域模型
+
+第一个实现将建立在核对器的特定领域模型上，并且相当简单。在后面的实现中，我们将抽象出特定于检查器的部分，并隐藏领域模型的许多细节。最终的领域模型将支持其他类似的棋类游戏，也许还有其他领域。
+我们将使用的领域模型有三个抽象的类型。一个棋盘追踪活的棋子和下一步要移动的棋手（当前棋手）的颜色。可以问什么棋子，如果有的话，是在一个特定的位置。一个棋子有一个颜色，一个位置，以及它是否是国王。一个位置是由相对于要移动的棋手的坐标来指定的。下面是对棋盘的操作。
+
+(current-pieces board )
+
+获得属于当前棋手的棋子列表。
+(is-position-on-board? coords board)
+
+测试给定的坐标是否指定了棋盘上的一个位置。
+不满足这个前提条件的坐标在与其他操作一起使用时将导致错误。
+(board-get coords board )获得位于coords指定位置的棋子。如果该位置上没有棋子，则返回#f。
+(position-info coords board)描述了棋盘中coords位置所占的内容。如果该位置是空的，其值为未占；如果它包含当前棋手的一个棋子，其值为被自己占据；如果它包含对手的棋子，其值为被对手占据。
+(is-position-unoccupied? coords board )等同于position-info返回unoccupied。
+(is-position-occupied-by-self? coords board ) 相当于 position-info 返回 occupied-by-self。
+(is-position-occupied-by-opponent? coords board )相当于position-info返回 occupied-by-opponent。
+在棋子上也有一个类似的小操作集。(piece-coords piece)得到棋子的坐标。
+(should-be-crowned? piece )测试棋子是否应该被加冕--特别是如果它还没有成为国王并且在对手的主行上。
+(crown-piece piece )得到一个与piece相同的新棋子，但它是一个国王。
+(possible-directions piece)得到一个该棋子可能考虑的移动方向的列表。这并不考虑在该方向上的移动是否被允许。
+坐标系统很简单：只有行和列的整数。
+当我们提到坐标或Coords时，我们指的是棋盘上的绝对坐标。我们用偏移量这个词来表示相对坐标。一个偏移量可以加到一些坐标上以产生新的坐标，或者反过来说，两个坐标可以相减以产生一个偏移。一个方向是一个偏移量，其中行和列是0、1或-1；对于跳棋来说，可能的方向是两个正对角线，行是1，列是-1或1。
+一旦一个棋子成为国王，它还可以使用后方的对角线，行-1。在国际象棋中，可能的棋步使用额外的方向，这取决于棋子，而马的棋步需要一个更复杂的定义。我们不会定义操作坐标的程序；它们应该是不言自明的。
+
+一个跳棋裁判
+
+我们需要一个数据结构来表示每一步棋。由于任何给定的棋步可能需要多次改变棋子的位置，我们将使用一个步骤对象的列表，每一个对象都指定了该步骤之前的棋子、该步骤之后的棋子、该步骤之后的棋盘，以及该步骤是否是一个跳跃。这样一个列表，我们称之为路径，从最新的一步到最旧的一步排序。这种排序有利于共享共同的子路径，当一个棋步可以以多种方式继续时，可能会出现这种情况。
+(step-to-step)得到走完一步后的棋子。
+(step-board step)在走完一步后得到棋盘。
+(make-simple-move new-coords piece board) 得到一个将棋子移动到棋盘上的新坐标的步骤。
+(make-jump new-coords jumped-coords piece board ) 得到一个步骤，将棋子移到棋盘上的新坐标处，并将对方的棋子移到新坐标处。
+(replace-piece new-piece old-piece board )得到一个步骤，用棋盘上的新棋子替换旧棋子。
+(path-contains-jumps? path)测试路径中是否有步骤是跳跃的。
+让我们来建立我们的裁判员。我们将首先描述从一个给定的起点到一个给定的方向有哪些简单的步骤是可能的。
+Try-step程序会识别一个潜在的下一步，对给定的路径进行扩充。如果没有这样的步骤，它将返回#f。
+
+(define (try-step piece board direction path) (let ((new-coords (coords+ (piece-coords piece) direction))) (and (is-position-onboard? new-coords board) (case (position-info new-coords board) ((unoccupied) (and (not (path-contains-jumps? path)) (cons (make-simple-move new-coords piece board) path))) (( occupied-by-opponent) (let ((landing (coords+ new-coords direction))) (and (is-position-on board? landing board) (is-position-unoccupied? landing board) (cons (make-jump landing new-coords piece board) path)))) (( occupied-by-self) #f) (else (error "unknown position info")))))) 
+
+这个过程沿着给定的方向看了一步的位置；如果它没有被占领，那么就有可能移动到那里。(我们明确地测试这是否是跳跃的延续，因为这在跳棋中是不允许的）。如果该位置被棋手的一个棋子占据，则不可能移动。但是如果该位置被对手的棋子占据，而该方向的下一个位置没有被占据，那么我们就可以跳过对手的棋子并吃掉它。
+我们必须为该棋子尝试每一个可能的方向。程序compute-next-steps通过对现有路径增加一步，返回可能的下一步路径的列表。
+
+(define (compute-next-steps piece board path) ;; filter-map drops false values (filter-map (lambda (direction) (try-step piece board direction path) (possible-directions piece))) 
+
+跳棋规则规定，当一个或多个跳棋是可能的时候，必须选择一个跳棋：
+
+(define (evolve-paths piece board)
+(let ((paths (compute-next-steps piece board ’())))
+(let ((jumps (filter path-contains-jumps? paths)))
+(if (null? jumps)
+paths
+(evolve-jumps jumps)))))
+
+而在一个初始跳跃之后，我们必须测试其他可能的跳跃：
+
+(define (evolve-jumps paths)
+(append-map (lambda (path)
+(let ((paths
+(let ((step (car path)))
+(compute-next-steps (step-to step)
+(step-board
+step)
+path))))
+(if (null? paths)
+(list path)
+;; continue jumping if possible
+(evolve-jumps paths))))
+paths))
+这就是为一个棋子生成招法的逻辑。裁判员必须为每一个棋子做这件事，并将结果汇总：
+
+(define (generate-moves board)
+(crown-kings
+(mandate-jumps
+(append-map (lambda (piece)
+(evolve-paths piece board))
+(current-pieces board)))))
+
+这个过程除了生成棋子之外，还做了两件事。
+首先，汇总的棋步可能包含一些棋子的跳跃和其他棋子的普通棋步，在这种情况下，只有跳跃是合法棋步。
+
+
+(define (mandate-jumps paths) (let ((jumps (filter path-contains-jumps? paths)) (if (null? jumps) paths jumps))
+
+第二，如果任何棋子到达对手的主行，就必须让它成为国王。
+
+
+(define (crown-king paths) (map (lambda (path) (let ((piece (step-to (car path)))) (if (should-be-crowned? piece) (cons (replace-piece (crown-piece piece) piece (step-board (car path)) ) path) paths))
+
+
+批评
+
+这段代码相当不错，它出乎意料地紧凑，而且是按照领域模型来写的。然而，检查器的规则分布在整个代码中。跳跃的可用性是在try-step过程中发现的，但跳跃可能是连锁的这一事实是在evolve-jumps中。另外，如果跳转是可用的，就必须跳转的规则被分割在程序evolve-paths和mandate-jumps中。一个更微妙的问题是，裁判员的控制结构与规则交织在一起。例如，变化的积累（路径中的步骤）是建立在控制结构中的，就像多跳的连锁一样。授权跳转的逻辑之所以出现在两个地方，是因为控制结构的分布需要它。
+2.4.2 领域的因素 让我们试着改善前面的实现中注意到的问题。我们能否将领域模型和控制结构与检查器的规则分开？领域模型 我们可以重新使用我们的单片机实现中的坐标、棋子和棋盘，因为它们基本上没有变化。
+然而，我们将取消国王和非国王棋子的具体概念，而是使用一个符号类型。这引入了两个新的操作。
+
+(piece-type piece )
+
+得到棋子的类型。
+
+(piece-new-type piece type)
+
+得到一个与piece相同的新棋子，只是它具有给定的类型。
+我们重新定义了should-be-crowned?和crown-piece，以使用piece类型，所以它们的行为和以前一样，但它们不再是核心领域模型的一部分。
+尽管程序possible-directions是跳棋所特有的，但我们在这里将使用它，但只是在定义跳棋的规则时。它不是新领域模型的一部分。
+步骤数据结构也是检查器所特有的，因为它规定了一个步骤是否是一个跳跃。我们将用一个更通用的结构来代替它，这个结构叫做变化。
+(make-change board piece flags)
+创建一个新的变化对象。flags参数是一个符号列表，我们可以用它来表示状态的变化，如吃掉一个棋子。选择器get-board , get-piece, 和get-flags可以用来获取变化的相应部分。
+就像棋子类型一样，变化标志提供了一种将游戏的具体特征添加到领域模型中的方法，而不需要将它们烘烤进去。
+我们将用一个更抽象的概念来取代路径的概念，这个概念被称为局部移动。一个局部移动包括一个初始的棋盘和棋子，以及零个或多个变化。我们的代码使用pmove作为部分移动的标识符。
+(initial-pmove board piece ) 创建一个没有变化和标志的pmove。
+(is-pmove-empty? pmove) 测试pmove是否为空：换句话说，它是否没有变化。
+(is-pmove-finished? pmove ) 测试 pmove 是否已被标记为完成。
+(current-board pmove) 返回pmove中最近一次变化的棋盘；如果没有变化，它将返回作为参数传递给initial-pmove的棋盘。
+(current-piece pmove) 返回pmove中最近一次变化的棋子；如果没有变化，它将返回作为参数传递给initial-pmove的棋子。
+接下来的操作以不同的方式扩展 pmove。当我们说 "通过 foo 扩展 pmove "时，我们的意思是 "通过添加一个做 foo 的变化对象扩展 pmove"。(new-piece-position coords pmove ) 通过将其棋子移动到coords来扩展pmove。
+(update-piece procedure pmove ) 通过用对其棋子调用程序的结果替换其棋子来扩展pmove。
+(finish-move pmove )通过添加一个带有标志的变化对象来扩展pmove，该标志指明移动已经完成。其结果总是满足谓词is-pmove-finished?
+在第 2.4.1 节的实现中，我们交替使用了跳跃和捕捉这两个术语。但是捕获是一个更普遍的想法：例如，在国际象棋中，捕获是通过置换棋子而不是跳过它来完成的。我们使用一个变化标志来编码捕捉棋子的行为，并使用以下程序来管理该标志。
+(captures-pieces? pmove) 测试是否有棋子被pmove吃掉。
+(capture-piece-at coords pmove) 通过移除位于coords的棋子来扩展pmove。
+由coords指定的位置必须包含一个对手的棋子。该操作还在新的变化对象中设置了一个标志，表示有棋子被吃掉；产生的 pmove 总是满足 captures-pieces?
+
+一个执行者 为了帮助将控制结构与跳棋的规则分开，我们建立了一个规则执行者，抓住了控制结构，而没有纳入规则的具体内容。在这种游戏中，有两种规则。一种，我们称之为演化规则，它增强了一个pmove，可能会返回多个派生的pmoves。另一种规则，即聚合规则，作用于一组棋子，消除一些不允许的棋子，或扩展一些棋子以纳入变化，如加冕国王。
+这里有一个执行程序，它从一些空的走法开始，每个棋手的棋子都有一个走法，并将这些走法演变为代表已完成的走法的集合。然后，它将聚合规则应用于已完成的棋步集合，最终返回一个合法棋步的集合。
+进化规则被实现为一个程序，它将给定的pmove转化为新的pmoves集合，其中一些可能已经完成（满足is-pmove-finished？） 执行者递归地将所有的演化规则应用于pmoves的集合，直到所有的pmoves都完成。
+一个聚合规则被实现为一个过程，它接受一个已完成的pmoves集合并产生一个新的集合。每个聚合规则被应用一次，聚合规则之间没有顺序限制，所以执行者可以将它们组合成一个程序，即复合聚合规则。如果没有聚合规则，那么复合规则就简单地返回其参数。
+
+(define (execute-rules initial-pmoves evolution-rules
+aggregate-rules)
+((reduce compose (lambda (x) x) aggregate-rules)
+(append-map (lambda (pmove)
+(evolve-pmove pmove evolution-rules))
+initial-pmoves)))
+(define (evolve-pmove pmove evolution-rules)
+(append-map (lambda (new-pmove)
+(if (is-pmove-finished? new-pmove)
+(list new-pmove)
+(evolve-pmove new-pmove evolution-
+rules)))
+(append-map (lambda (evolution-rule)
+(evolution-rule pmove))
+evolution-rules)))
+
+进化规则由程序define-evolution-rule注册，以便在执行中使用，聚合规则由程序define-aggregate-rule注册。每条规则都有一个名字，它被注册在哪个游戏中，以及一个实现其行为的过程。
+
+跳棋规则
+
+这里有一条简单棋步的规则。这是在可能的方向上寻找任何未被占据的相邻位置，并将pmove扩展到包括对该位置的移动。在这样的棋步之后，继续下棋是不合法的，因此我们将该步棋标记为完成。
+(define-evolution-rule 'simple-move checkers (lambda (pmove) (if (is-move-empty? pmove) (get-simple-moves pmove) '()))) (define (get-simple-moves pmove) (filter-map (lambda (direction) (let ((landing (compute-new-position direction 1 pmove)) (board (current-board pmove)) (and (is-position-onboard? (is-position-on-board? landing board) (is-position-unoccupied? landing board) (finish-move (new-piece-position landing pmove))))) (possible-directions (current-piece pmove))))) 
+
+在get-simple-moves中，程序compute-new-position得到了可能被移动的棋子的拟议着陆点，并给出了移动的方向和距离。程序offset*将一个偏移量和一个数字相乘，得到一个由数字缩放的新偏移量。
+
+(define (compute-new-position direction distance pmove) (coords+ (piece-coords (current-piece pmove)) (offset* direction distance)) 
+
+跳跃的规则是类似的，除了它必须在一个给定的方向上寻找一个被占领的位置和一个未被占领的位置。当没有跳转的可能时，一个pmove就完成了。
+
+(define-evolution-rule ’jump checkers
+(lambda (pmove)
+(let ((jumps (get-jumps pmove)))
+(cond ((not (null? jumps))
+jumps)
+((is-pmove-empty? pmove)
+’()) ; abandon this pmove
+(else
+(list (finish-move pmove)))))))
+(define (get-jumps pmove)
+(filter-map
+(lambda (direction)
+(let ((possible-jump
+(compute-new-position direction 1 pmove))
+(landing (compute-new-position direction 2 pmove))
+(board (current-board pmove)))
+(and (is-position-on-board? landing board)
+(is-position-unoccupied? landing board)
+(is-position-occupied-by-opponent? possible-jump
+board)
+(capture-piece-at possible-jump
+(new-piece-position landing
+pmove)))))
+(possible-directions (current-piece pmove))))
+
+造王与其他规则无关：只需查看所有已完成的棋步，并为位于对手主行的任何非王加冕。
+(define-aggregate-rule 'coronation checkers (lambda (pmoves) (map (lambda (pmove) (let ((piece (current-piece pmove))) (if (should-be-crowned? piece) (update-piece crown-piece pmove) pmove)) pmoves) )
+
+最后，当一个或多个棋子可用时，规定跳棋的规则在最后通过检测这种情况并丢弃所有非跳棋的棋子来完成。
+
+(define-aggregate-rule 'require-jumps checkers (lambda (pmoves) (let ((jumps (filter captures-pieces? pmoves)) ) (if (null? jumps) pmoves jumps))))
+
+批评 我们的裁判员的基于规则的实施解决了我们前面发现的问题。它将控制结构从我们的程序中移除，并将其定位在执行中。因此，规则是具体的：每一个检查员的规则都由一个程序性规则来表达。这些规则并不像在早期的实现中那样分散。
+然而，这也是有代价的：我们必须为每条规则添加适用性条件，以防止它被应用于不合适的棋步。16 例如，简单棋步规则必须排除它所给出的任何非空棋步，因为一个非空棋步可能包括一个或多个跳，而这些跳不能用简单棋步来继续。这是基于规则的系统的一个普遍的错误特征：每个规则都必须能够接受任何规则的输出；这通常是通过将控制状态编码在规则所应用的数据中来处理的。
+
+练习2.12：一点国际象棋 使用我们用于跳棋的相同领域模型，可以捕捉国际象棋的规则。除了国际象棋涉及许多类型的棋子这一事实外，还有几个重要的区别。一个区别是，车、象和皇后的运动范围只受到障碍物的限制。另一个区别是，捕获是通过位移而不是跳跃。在这个练习中，我们将只考虑车和马；其余的棋子将在练习2.13中讨论。
+a. 构建一个类似的裁判员来生成车的合法棋步。不要试图实施弃子规则。
+b. 增加你的裁判员以模拟马的行为。
+练习2.13: 更多的国际象棋 做一个国际象棋规则的完整实现。
+练习2.14：高级项目 选择一些其他的领域，而不是棋类游戏，使用规则执行器和你设计的领域模型，建立一些过程的规则的实现。这并不容易。
+
+2.5 小结 本章所展示和阐述的技术对每个大型系统的设计和开发都有帮助。
+使用具有明确定义的接口的可混合和匹配的互换部件来构建我们的系统，几乎总是对我们有利。
+在具有高阶程序和词法范围的语言中，如Scheme或Java，很容易建立组合器系统--标准的组合方式，如compose，用于可交换部件库。而且，制作共享一个公共接口规范的参数化部件也很方便。例如，如果我们的接口规范是接受一个参数并返回一个值的过程，那么（define (make-incrementer dx) (lambda (x) (+ x dx))）就定义了一组可互换的增量器。用像C这样没有词义范围的高阶程序的语言来制作组合器系统和可组合部分的库要难得多。但只要仔细规划并付出一些努力，还是可以做到的。
+当我们面对一个基于不能干净地组合的部分的系统时，比如正则表达式，通常可以通过元编程来改善困难。在这种情况下，我们建立了一种新的基于组合器的语言，并将其编译到正则表达式语言中，形成了一种令人愉快但冗长的选择。对于需要匹配字符串的程序来说，我们的正则表达式组合器语言是一种很好的特定领域的中间语言，但是作为用户输入的脚本语言，它就不是那么好了。为此，我们希望为匹配字符串设计一个干净的、更简洁的语法，可以编译成一个基于组合器的中间语言。17 封装器是使旧代码在新环境下有用的一种常见策略。我们展示了如何通过建立一个自动进行必要的单位转换的包装器系统，使假设了特定单位系统的程序可以用于其他单位系统。为了做到这一点，我们制作了一个小型的特定领域语言来表达单位转换，并将其编译到相应的包装器中。
+但是包装器不仅仅可以用于旧代码的适配器。我们可以用一个包装器来包装一个过程，这个包装器可以检查输入参数的合理性，并检查输出是否是给定输入的合理的结果。如果这种检查失败了，包装器可以引发一个错误信号。这种 "偏执型编程风格 "是一种非常强大的工具，可以保护系统不被滥用，也可以用于调试。
+正如用正则表达式和单位转换所说明的那样，攻击一类问题的最好方法往往是发明一种特定领域的语言，用它来表达解决方案是很容易的。
+为了探索这种策略，我们把生成棋盘游戏的合法动作的问题分为三个可单独扩展的部分：领域模型、控制结构执行器和游戏的具体规则。领域模型提供了一组基元，这些基元被组合成规则，为我们提供了一种表达规则的语言。规则的应用是由控制结构执行者来排序的。这种组合构成了表达跳棋规则的特定领域语言的本质--比如棋盘游戏。
+每一种好的语言都有基元、这些基元的组合手段以及组合的抽象手段。
+本章所展示的例子是嵌入在Scheme中的，因此能够使用Scheme的强大的组合和抽象手段。但这仅仅是个开始。在第五章中，我们将超越这种嵌入策略，使用金属语言学抽象的强大思想。
+
+
+1领域模型的通用性是 "Postel法则 "的一个例子--见第3页。
+2有一些值得注意的例外：Java 8引入的函数式编程扩展直接捕获了有用的组合。功能性编程语言，如Lisp和Haskell，有有用的组合机制库。
+3这里的事情很简单，但在有许多内部程序的复杂程序中，描述性的名字可以使事情更容易阅读和理解。在MIT/GNU Scheme中，对这里返回的过程进行命名有一个小小的好处，因为调试器可以为一个本来是匿名的过程显示这个名字。
+4 MIT/GNU Scheme中的哈希表程序的文档可以在[51]中找到。
+5我们感谢Guy L. Steele Jr.建议我们展示这种分解。
+6关于值、随值调用和让值的文献可以在[51]和[109]中找到。
+7组合逻辑是由Moses Schönfinkel[108]发明的，在20世纪初由Haskell Curry[26]发展。他们的目标与计算无关，而是通过消除对量化变量的需求来简化数学的基础。
+8 在get-arity中使用的麻省理工学院/GNU Scheme程序-arity，将为返回的程序产生一个数字arity，所以我们不需要在上面贴上便条。
+9我们通过调用r:repeat与#f来表示没有最大值。
+1011 12ERE特殊字符，[96] #tag 09 04 03 ERE交替，[96] #tag 09 04 07 EREs匹配多个字符，[96] #tag 09 04 06 13 BREs匹配多个字符，[96] #tag 09 03 06 14 BREs匹配多个字符，[96] #tag 09 03 06 15注意，米-英寸的两个实例的组成是将平方米转换成平方英寸的合理方法。有一些单位转换不是这样的。例如，取开尔文到摄氏的转换的平方是没有意义的，即使数值计算产生了一致的结果。这是一个事实，即摄氏温度与有物理意义的开尔文温度有一个偏移。事实上，摄氏温度的平方没有物理意义。
+16 然而，由于规则执行者明确地处理了完成的pmoves，我们不需要在规则中对这些进行测试。
+17 SRFI 115[110]是一个有趣的例子。
+
+

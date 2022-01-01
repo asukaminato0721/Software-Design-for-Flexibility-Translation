@@ -1,0 +1,829 @@
+4 模式匹配 模式匹配是一种支持创建特定领域的语言和其他系统的技术，应该具有加法的特点。
+模式匹配是平等测试的概括。在平等测试中，我们比较两个对象以确定它们具有相同的结构和内容。在模式匹配中，我们概括了平等测试，允许结构和内容的某些部分不被指定。一个模式准确地指定了数据的某些部分，但它有 "洞"（模式变量），与数据的非指定部分相匹配。我们可以对模式变量所能匹配的内容进行约束，我们可以要求同一模式变量的多个实例匹配同一事物。
+一个模式可以与更大的数据的一部分相匹配；匹配的背景是不指定的。处理部分信息的能力意味着只有模式的指定部分是关于所匹配的数据的假设；对未指定的部分很少或没有假设。
+模式匹配的这一特性使我们能够构建非常灵活的基于规则的系统。在一个基于规则的系统中，人们可以添加新的规则来增加新的能力，尽管在如何定义规则以及它们如何相互作用方面存在着困难。例如，如果一个以上的规则适用，其结果可能取决于应用的顺序。在棋盘游戏规则解释器中，我们已经遇到了规则互动的问题。(见第63页的评论。)除了使用模式来匹配符合部分规范的数据，模式本身也可以代表部分已知的信息。合并这些模式（统一）可以产生比单个模式更具体的信息。
+模式匹配的另一个用途是作为通用程序的一般化。泛型程序允许我们通过调节程序中自由变量的含义来做一些神奇的事情。我们可以认为，采用通用程序的程序，例如与 "+"绑定的程序，是为一个处理程序做广告，这个处理程序可以完成 "+"所提供的参数的工作。如果所提供的参数满足附加时提供的谓词，那么附加到通用程序的处理程序就是适用的。但是，用于宣传需要完成的工作的语言是相当有限的--我们只有一个符号，在这种情况下是+。如果我们使用模式来声明需要完成的工作，并使用其他模式来声明可能完成这些工作的过程，我们就有了一种更丰富的语言：模式定向调用。
+
+4.1 模式 代数的基本规律可以表示为模式的等价性。这就是乘法大于加法的分配律。它说我们可以在不改变表达式的值的情况下用另一个边代替一个边。这个定律的每一面都是一个模式，有模式变量a、b和c，以及模式常数×和+。该定律说的是，如果我们发现一个代数表达式是某物与某项之和的乘积，我们可以用两个乘积之和来代替它，反之亦然。
+让我们看看如何根据模式匹配来组织程序。这里的一个关键想法是将模式编译成组合器，这些组合器是匹配器的组成部分。在第4.2节中，我们将在初级代数的术语重写系统中证明这一点。
+模式的语言 第一个工作是建立我们的模式语言。我们将从简单的东西开始。我们将用Lisp（Scheme）列表来制作我们的模式。与上面的数学例子不同，我们将没有保留符号，如和+，所以我们必须区分模式变量和模式常量。一个模式变量可以用一个以查询符号"？"开头的列表来表示。这是一个传统的选择。因此，在这种语言中，构成分配律的模式可以表示如下，假设我们是在操作Lisp的前缀数学表达式：（*（? a）（+（? b）（? c）））（+（*（? a）（? b））（*（? a）（? c））) 你可能会抱怨说，我们本可以使用区别符号，例如?a，而不是冗长的(?a)。这样做也可以，但是这样的选择会使我们的扩展变得有点困难，比如说，如果我们想让一个变量被限制为只能匹配数字。当然，如果有帮助的话，我们可以在以后添加语法，但请记住Alan Perlis的格言："语法糖会导致分号的癌症"。通过我们简单的列表表示法，我们能够限制模式变量(?a)只匹配数字，方法是在其列表表示法中加入描述限制的谓词。(?a ,number?)。
+对我们设计的匹配器的一个限制是，上面的第二个模式应该匹配(+ (* (cos x) (exp y)) (* (cos x) (sin z))，其中a=(cos x) ，b=(exp y)，c=(sin z)。
+但它不应该与（+ (* (cos x) (exp y)) (* (cos (+ x y)) (sin z))，因为对于(?a)来说没有一致的赋值可能，除非以某种方式，x=(+ x y).1 我们将在第4.4节研究统一匹配时了解这种情况；这里我们将决定没有匹配可能。
+对匹配器的另一个约束，对其结构有重要影响，就是需要匹配一个列表中未知数量的连续元素。例如，假设我们想制定一条规则，用1替换正弦和余弦的平方之和，即使它们在和中不是连续的：（+ ... (expt (sin theta) 2) ... (expt (cos theta) 2) ...） (+ 1 ... ...) 这里的...可以代表很多项。我们将使用一个分段变量，用前缀??书写，以匹配许多项。所以我们要写的模式是： (+ (??t1) (expt (sin (?x)) 2) (?t2) (expt (cos (?x)) 2) (? t3)) 我们在这里需要三个段变量。段变量（? t1）将匹配正弦项之前的条款，（? t2）将匹配正弦项和余弦项之间的条款，（? t3）将匹配余弦项之后的条款。
+段落变量具有深远的影响，因为在找到匹配的下一个部分之前，我们不知道一个段落有多长，而且我们可能以多种方式匹配同一个数据项。例如，在同一个和中可能有两个不同角度的正弦和余弦的平方。更简单的是，模式(a (??x) (??y) (?x) c)可以用四种不同的方式与数据项(a b b b b b c)相匹配。(注意，段变量x在模式中出现的两个地方必须吃掉相同数量的b）。因此，匹配器必须对段变量的可能分配空间进行搜索。
+
+4.2 术语重写 术语重写系统是创建特定领域语言的强大工具，用于操作类似表达式的信息。如果我们有一个表达式的语法系统，我们可能需要用 "等价的 "子表达式来替换一些子表达式，我们通常可以使用基于规则的术语重写系统来描述这些转换。例如，许多编译器的优化可以被表达为程序片段在更大范围内的局部重写。
+术语重写系统的基本特征是使用模式匹配器来识别要转换的信息，以及用于实例化替换的模板系统。对于从等价理论（"等价 "表达式系统）构建收敛的术语重写系统的问题，已经有了广泛的研究[72]，但我们在此不做探讨。另外，与之匹配的模式和实例化的模板之间存在着表面上的相似性，这可能暗示了制定双向规则的可能性；我们也不会去研究这个问题。首先我们开发一个简单的单向系统，其中模式被用来识别输入，模板被用来做输出。
+下面是一些代数简化规则的近似值：（定义代数-1（规则简化器（列表；；加法的关联律（规则'(+ (?a) (+ (?b) (? c))'(+ (+ ,a ,b) ,c)) ;; 乘法的换算法则(规则 '(* (?b) (?a)) (和 (expr<?a b) '(* ,a ,b)) ;; 乘法的分布法则在加法之上(规则 '(* (?a) (+ (?b) (?c))' (+ (* ,a ,b) (* ,a ,c)))))) 在代数-1中，有三条规则。第一条规则实现了加法的关联法则，第二条规则实现了乘法的交换法则，第三条规则实现了乘法对加法的分配法则。
+每条规则由两部分组成：一个匹配子表达式的模式和一个结果表达式。如果模式匹配，就会对结果表达式进行评估。如果结果表达式的值是#f，那么该规则就不适用。否则，评估的结果将取代匹配的子表达式。注意，我们使用了第391页上描述的反引号机制来简化后续表达式的书写。
+这些规则被收集在一个列表中，用于规则简化程序。其结果是一个可以应用于代数表达式的简化程序。
+(algebra-1 '(* (+ y (+ z w)) x)) (+ (+ (* x y) (* x z)) (* w x)) 注意在换元法则的后果中的限制性谓词expr<? (规则 '(* (?b) (?a)) (和 (expr<? a b) '(* ,a ,b)) 如果随后的表达式返回#f，那么该匹配被认为是失败的。系统会回溯到匹配器中去寻找其他的匹配；如果没有找到，则该规则不适用。在换元法中，限制性谓词expr<? 对代数表达式施加了一个排序。这个限制的原因留作练习4.1。
+
+练习4.1: 守护表达式 为什么(expr<? a b)的限制在换元法中是必要的？如果没有限制会出什么问题？4.2.1 代数中的分段变量 代数-2的规则系统要有趣得多。它是在假设加法和乘法是n次方运算的情况下建立的。我们需要分段变量来实现这一点。我们还在变量限制中使用数？ 谓语来支持数字简化的规则。
+(define algebra-2 (rule-simplifier (list ;; Sums (rule '(+ (?a)) a) ; unary + is identity (rule '(+ (?a) (+ (?b)) (?c)) '(+ ,@a ,@b ,@c)) ; 联想：使用n-ary + (规则 '(+ (?a) (?y) (?x) (?b)) (和 (expr<? x y) ; 交换 '(+ ,@a ,x ,y ,@b)) ;; 产品 (规则 '(* (?a)) a) ; 单项 * 是身份 (规则 '(* (?a) (* (?b)) (?c)) '(* ,@a ,@b ,@c)) ; 联想：使用n-ary * (规则 '(* (?a) (?y) (?x) (?b)) (和 (expr<?x y) ; 交换 '(* ,@a ,x ,y ,@b)) ;; 分配法 (规则 '(* (?a) ( + ( ?b) ) ) (?c)) '(+ ,@(map (lambda (x) '(* ,@a ,x ,@c)) b)) ;; 数字简化 (规则 '(+ 0 (?x)) '(+ ,@x)) (规则 '(+ (?x ,数?) (?y ,数? )(?z)) '(+ , (+ x y) ,@z)) (规则 '(* 0 (?x)) 0) (规则 '(* 1 (?x)) '(* ,@x)) (规则 '(* (?x ,数?) (?y ,数?) (?z)) '(* , (* x y) ,@z) ) ) ) 通过代数-2，我们实现了一些数字上的简化，此外还处理了和与积的多个参数。请注意，我们使用反引号机制来构建模式，其中包括谓词数? 作为对变量的限制，此外还使用它来构建结果表达式。关于简化器的进一步理解，见练习4.2。
+现在我们可以得到这些结果： (algebra-2 '(* (+ y (+ z w)) x)) (+ (* w x) (* x y) (* x z)) (algebra-2 '(+ (* 3 (+ x 1)) -3)) (* 3 x) 此时我们可以看到如何可能扩展这样一个系统来简化大类代数表达。
+练习4.2：术语排序 根据谓词expr<?，一个明确是数字的表达式要小于任何不明确是数字的表达式。
+a. 在代数-2中，换元法则对表达式施加的排序如何使数字简化规则有效？ b. 假设换元法则不强制排序。
+我们将如何表达数字简化规则？解释一下为什么数字简化会变得非常昂贵。
+练习4.3: 排序效率 换元法中的排序在和的项和积的因子上演化出一个n2的泡沫排序。如果有很多项，如一个严重的代数问题，这可能会变得很糟糕。
+在这个系统中是否有一些方法可以使排序更加有效？如果没有，为什么没有？如果有，你会如何安排？
+
+练习4.4: 收集术语 我们所描述的系统并不收集同类术语。例如: (algebra-2 '(+ (* 4 x) (* 3 x))) (+ (* 3 x) (* 4 x)) 建立一个新的代数系统algebra-3，其中包括导致收集同类项的规则，使结果成为项之和。
+展示你的解决方案。你的解决方案必须能够处理像（algebra-3 '(+ y (* x -2 w) (* x 4 y) (* w x) z (* 5 z) (* x w) (* x y 3)) (+ y (* 6 z) (* 7 x y)) 4.2.2 实现规则系统 现在我们对使用基于模式的规则系统有了一些经验，让我们深入研究一下它是如何工作的。
+我们将规则实现为一个过程，该过程将规则的模式与给定的表达式进行匹配。如果匹配成功，规则会在一个环境中评估其结果，在这个环境中，模式变量被绑定到其匹配的数据上。规则程序采取成功和失败的延续，可以用来回溯到规则的结果或模式匹配部分。2 上面使用的规则简化程序是一个简单递归简化器的构造器。它产生simplify-expression，这个过程接收一个表达式并使用规则来简化该表达式。它递归地简化一个表达式的所有子表达式，然后应用规则来简化结果表达式。它反复这样做，直到这个过程收敛。因此，返回的表达式是简化过程的一个固定点。
+(define (rule-simplifier the-rules) (define (simplify-expression expression) (let ((subexpressions-simplified (if (list? expression）（map simplify-expression expression）expression））（try-rules subexpressions-simplified the-rules (lambda (result fail) ; A: success continuation (simplify-expression result)) (lambda () ; B: failure continuation subexpressions-simplified)))) simplify-expression) 程序try-rules只是扫描规则列表，通过成功和失败的延续来确定扫描的顺序。
+(define (try-rules data rules succeed fail) (let per-rule ((rules)) (if (null? rules) (fail) ; out of rules: go to B above (try-rule data (car rules) succeed; if rule succeeds go to A above (lambda () ; if rule fails try other rules (per-rule (cdr rules))))))) (define (try-rule data rule succeed fail) (rules data succeed fail) 规则的构建是由程序make-rule实现的，它接收一个规则模式和一个实现结果表达的处理程序。例如，第161页上的换元法则规则可以直接用make-rule实现：（make-rule '(* (?b) (?a)) (lambda (b a) (and (expr<? a b) '(* ,a ,b)))) 处理程序（lambda (b a) ...）需要从匹配器程序产生的字典中获得参数，这些参数是名为a和b的模式变量的值。该规则按照这些值在模式中出现的顺序，将处理程序应用于这些值的列表。因此，处理程序必须按照这个顺序来写它的参数。
+规则构造函数make-rule将模式编译成一个匹配程序。它返回的规则是一个使用该匹配过程来匹配数据的过程。如果匹配成功，该规则将处理程序应用于匹配产生的模式变量的值。
+我们将在第 4.3 节中学习如何将模式编译成一个匹配过程；我们在这里需要知道的是，匹配过程可以用 run-matcher 来运行，如果匹配成功，run-matcher 的第三个参数将被调用，并带有一个 dictionary。dictionary dict是模式变量与它们所匹配的子表达式的映射。如果匹配失败，run-matcher返回#f，规则失败。
+(define (make-rule pattern handler) (let ((match-procedure (match:compile-pattern pattern))) (define (the-rule data succeed fail) (or (run-matcher match-procedure data (lambda (dict) (let ((result (application handler (match:all-values dict)))) (and result (successful result (lambda () #f)))))) (fail）））the-rule））程序match:all-values按照模式中出现的顺序返回模式变量的值。
+
+4.2.3 题外话。Magic macrology 比较第161页给出的规则定义：(rule '(* (?b) (?a)) (and (expr<?a b) '(* ,a ,b))) 与make-rule需要的参数。(make-rule '(* (?b) (?a)) (lambda (b a) (and (expr<?a b) '(* ,a ,b))))) 名称a和b是重复的：它们在处理程序的模式和参数列表中都出现了，而且顺序相同。这既让人讨厌，又容易出错，因为我们必须记住重复这些名字，如果我们错误地重复它们或者以错误的顺序重复它们，我们就会犯错误。
+这就是语法抽象的一个案例，也就是所谓的宏。下面这个相当神奇的代码片段将规则定义转化为对make-rule的预期调用。(define-syntax rule (er-macro-transformer (lambda (form rename compare) (let ((pattern (cadr form)) (handler-body (caddr form)) (r-make-rule (rename 'make-rule)) (r-lambda (rename 'lambda))' (,r-maker-rule,pattern (,r-lambda , (match:pattern-names pattern) ,handler-body )))))) 我们至少可以用下面的魔法咒语部分地检查这个宏，它可以扩展表达式中出现的宏：（pp (syntax '(rule '(* (?b) (?a)) (and (expr<? a b) '(* ,a ,b)) (the-environment)) (make-rule '(* (?b) (?a)) (lambda (b a) (and (expr<?a b) (list '* a b))))) 我们看到，该规则扩展为对make-rule的调用，包含模式和处理过程。这就是为了制定规则而被评估的表达式。在更传统的语言中，一个宏，例如rule，会直接扩展为代码，被替换为宏调用。然而，这个过程在指代上是不透明的，因为宏的扩展可能会使用与用户的符号相冲突的符号。在Scheme中，我们试图避免这个问题，允许用户编写不会引起冲突的卫生的宏。但这比用一个表达式代替另一个表达式要复杂得多。我们不会试图在这里解释这些问题或解决方案，我们只使用MIT/GNU Scheme参考手册[51]中描述的解决方案。
+
+4.2.4 模式导向的调用 规则执行者try-rules也可以用来实现使用模式对输入属性进行调度的程序。
+模式操作符的参数与模式操作符的规则模式相匹配。匹配规则的结果是计算要返回的值。
+例如，我们可以编写传统的阶乘程序，将条件分配如下。(define factorial (make-pattern-operator (rule '(0) 1) (rule '(?n ,positive?) ) (* n (factorial (- n 1)))))) (factorial3628800 10) 我们还可以使用这种机制来建立程序，其行为取决于提供的参数数量。例如，Lisp的-操作符在应用于一个参数时是否定的，而在应用于多个参数时是减法。(define - (make-pattern-operator (rule '((? x)) (n:- 0 x)) (rule '((?x) (??y)) (n:- x (apply n:+ y)))))) 我们可以允许一个模式运算符被动态地扩展为附加规则。这样的模式操作符类似于通用程序，允许程序员非局部地分配规则定义。例如，在一个窥视孔优化器中，我们可能希望将各种优化与编译器的代码生成器的不同部分进行分组。
+(define peephole (make-pattern-operator)) (attach-rule! peephole (rule '((push (?reg1)) (pop (?reg2))) (if (eqv? reg1 reg2) '() '(move ,reg1 ,reg2))))) (attach-rule!  peephole (rule '((or (?reg) (?const1 ,unsigned-integer?) (or (?reg) (?const2 ,unsigned-integer?)) '((or ,reg ,(bitwis-or const1 const2))))) 第一条规则可以在优化器的控制结构部分，第二条规则可以与优化器的逻辑算术部分放在一起。
+这里是实现模式运算符的一种方法。传递给make-pattern-operator的最后一条规则是默认规则。它总是最后被尝试，无论后来添加了什么其他规则。
+(define (make-pattern-operator . rules) (let ((rules (cons 'rules (if (pair? rules) (except-last-pair rules) '()))) (default-rule (and (pair? rules) (last rules)))) （定义 (the-operator . data）（定义（success value fail）value）（定义（fail）（error "No applicable operations:" data））（try-rules data（cdr rules） succeed（if default-rule（lambda（）（try-rule data default-rule succeed fail））fail）））。(set-pattern-metadata! the-operator rules) the-operator)) 我们使用set-pattern-metadata！将规则列表作为 "便条 "附在操作符上，并在下面的代码中使用pattern-metadata来检索它。我们有程序将规则添加到操作员规则列表的前面（override-rule!）或后面（attach-rule!）。(define (attach-rule! operator rule) (let ((metadata (pattern-metadata operator)) (set-cdr! metadata (append (cdr metadata) (list rule))))) (define (overrid-rule! operator rule) (let ((metadata (pattern-metadata operator)) (set-cdr! metadata (cons rule (cdr metadata ))))))
+
+
+4.3 匹配器的设计 现在我们已经看到了模式匹配的一些力量，我们将探索它是如何工作的。我们的匹配器是由一系列的匹配程序（或称匹配器）和一些组合器构成的，这些组合器将它们结合起来产生复合匹配器。3 模式的每个原始元素都由一个原始匹配器表示，唯一的组合，即列表，由一个组合器表示，该组合器将列表元素的匹配器结合起来，形成一个复合匹配器。
+所有的匹配过程都需要三个参数：一个包含要匹配的数据的列表，一个模式变量的绑定字典，以及一个在匹配成功时要调用的延续过程（success）。succeed 的参数必须是由匹配产生的新字典和从输入列表中消耗的项目数量。这个数字将被用来确定在分段匹配返回后该如何进行。如果匹配不成功，匹配过程返回 #f。
+有三个原始的匹配过程和一个组合器。
+让我们来看看它们。我们还需要一个小程序，我们可以把它作为成功参数传递给匹配程序，以报告结果： (define (result-receiver dict n-eaten) '(success ,(match:bindings dict) ,n-eaten)) 模式常量 程序 match:eqv 接收一个模式常量，例如 x，并产生一个匹配程序，eqv-match，当且仅当第一个数据项等于（使用 eqv? 它不会增加到字典中。成功的第二个参数是所匹配的项目数，这个匹配过程的参数是1。
+(define (match:eqv pattern-constant) (define (eqv-match data dictionary succeed) (and (pair? data) (eqv? (car data) pattern-constant) (success dictionary 1)) eqv-match) 例如： (define x-matcher (match:eqv 'x)) (x-matcher '(x) (match:new-dict) result-receiver) (success () 1) (x-matcher '(y) (match:new-dict) result-receiver) #f 元素变量 过程匹配：元素是用来为一个模式变量，例如（？ x），制定一个旨在匹配单一项目的匹配过程，元素-匹配。
+当匹配一个元素变量时，有两种可能：要么元素变量已经有一个值，要么它还没有一个值。如果该变量有一个值，它就被绑定在字典中。在这种情况下，当且仅当绑定的值与第一个数据项相等(使用 equal?)时，匹配才会成功。如果变量没有一个值，它就没有被绑定。在这种情况下，匹配成功，通过增加变量与第一个数据项的绑定来扩展字典。在任何一种成功的情况下，我们都表示所消耗的项的数量是1。
+(define (match:element variable) (define (element-match data dictionary succeed) (and (pair? data) (let ((binding (match:lookup variable dictionary)) ) (if binding (and (equal? (match:binding-value binding) (car data)) (success dictionary 1)) (success (match:extend-dict variable (car data) dictionary) 1))))) element-match) 下面是一些例子。匹配绑定是一个列表：第一个元素是变量名；第二个元素是值；第三个元素是变量的类型（这里都是?元素变量）。
+((match:元素 '(?x)) '(a) (match:new-dict) 结果接收者) (成功 ((x a ?) 1) ((match:元素 '(?x)) '(a b) (match:new-dict) 结果接收者) (成功 ((x a ? )) 1) ((match:元素 '(?x)) '((a b) c) (match:new-dict) 结果接收者) (成功 ((x (a b) ? ) ) 1)
+
+
+分段变量
+过程match:segment用来做一个匹配过程。
+segment-match，用于一个模式变量，例如（？
+旨在匹配一连串的项目。一个分段变量匹配器
+比元素变量匹配器更复杂，因为它
+可以消耗未知数量的数据项。因此，一个段
+匹配器不仅要通知它的调用者新的字典，而且要通知它数据中的多少个项目。
+还必须告知它的调用者有多少数据项被吃掉了。
+当匹配一个分段变量时，有两种可能性。
+要么段变量已经有一个值，要么它还没有
+有一个值。如果该段变量有一个值，那么这个值必须
+匹配数据；这可以通过第174页的match:segment-equal?
+174. 如果段变量还没有一个值，那么必须给它一个
+给它一个值。
+由 match:segment 返回的匹配器 segment-match 。
+所返回的匹配器，即segment-match，以数据的某个初始子列表（list-head data
+i），作为对段变量的可能分配。(它从
+i=0开始，假设段不会从数据中吃掉任何项目）。
+然而，如果这个成功导致了后来的匹配失败，那么
+段落匹配器会尝试比它已经尝试过的元素多吃一个
+(通过执行(lp (+ i 1)))。如果分段匹配器运行
+的数据项用完了，它就无法进行匹配。这就是 "回溯搜索 "的关键所在。
+回溯搜索的关键，当存在段的
+变量。
+(define (match:segment variable)
+(define (segment-match data dictionary succeed)
+(and (list? data)
+(let ((binding (match:lookup variable dictionary)))
+(如果绑定
+(match:segment-equal?
+数据
+(match:binding-value binding)
+(lambda (n) (Successful dictionary n)))
+(let ((n (length data)))
+(let lp ((i 0))
+(and (<= i n)
+(或 (成功 (match:extend-dict
+变量
+(list-head data i)
+dictionary)
+i)
+(lp (+ i 1))))))))))
+段落匹配)
+比如说。
+((match:segment '(??a))
+'(z z z) (match:new-dict) result-receiver)
+(成功 ((a () ??)) 0)
+当然，一个零长度的段也是可以的。
+如果我们想看到所有可能的匹配，我们可以改变
+结果接收器，在打印出成功的结果后返回#f。这
+导致匹配器程序产生一个替代值。
+如果可能的话。
+(define (print-all-results dict n-eaten)
+(pp '(success , (match:bindings dict) ,n-eaten))
+;; 通过返回#f，我们强制进行回溯。
+#f)
+((match:segment '(??a))
+'(z z z) (match:new-dict) print-all-results)
+(成功((a ()??)) 0)
+(成功((a (z) ??)) 1)
+(成功((a (z z) ??)) 2)
+(成功((a (z z) ??)) 3)
+#f
+现在，回到已经有一个值的段变量的情况下
+值的情况，我们需要确保该值与数据的一个初始段相匹配。
+数据的初始段。这是由match:segment-equal?处理的。它
+将值的元素与数据进行比较。如果成功的话。
+它通过调用ok（作为其第三个参数传递的过程）返回
+返回，并给出从数据中消耗的元素的数量（必须是值的长度）。
+是值的长度）；否则，它将返回#f。
+(define (match:segment-equal? data value ok)
+(let lp ((data数据) (value价值) (n 0))
+(cond ((pair? value)
+(if (and (pair? data)
+(equal? (car data) (car value))
+(lp (cdr data) (cdr value) (+ n 1))
+#f))
+((null? value) (ok n))
+(否则 #f))))
+
+匹配列表 最后，有一个 match:list 组合器，它接收一个匹配程序的列表，并制作一个匹配程序，当且仅当给定的匹配器吃掉数据列表中的所有元素时，该匹配程序才会匹配数据列表。它依次应用这些匹配器。每个匹配器告诉列表组合器在将剩余数据传递给下一个匹配器之前要跳过多少个项目。
+(define (match:list matchers) (define (list-match data dictionary succeed) (and (pair? data) (let lp ((data-list (car data) (matchers matchers) (dictionary dictionary)) (cond ((pair? matchers) ((car matchers) data-list dictionary (lambda (new-dictionary n) ;; 列表匹配的本质： (lp (list-tail data-list n) (cdr matchers) new-dictionary)))) ((pair? data-list) #f) ;未匹配的数据 ((null? data-list) (succceed dictionary 1) (else #f))))) list-match) 注意，由 match:list 组合器返回的匹配器 list-match 与其他匹配器的接口完全相同，允许它被纳入一个组合中。所有的基本匹配程序都有完全相同的接口，这一事实使之成为一个组合器系统。
+现在我们可以做一个匹配器，它可以匹配一个由任何数量的元素组成的列表，以符号a开始，以符号b结束，并且在它们之间有一个分段变量(??x)，通过组合：((match:list (list (match:eqv 'a) (match:segment '(?? x)) (match:eqv 'b)) '((a 1 2 b)) (match:new-dict) result-receiver) (success ((x (1 2) ??)) 1) 这是一次成功的匹配。返回的 dictionary 只有一个条目：x=(1 2)，并且匹配从提供的列表中精确地吃了一个元素（列表 (a 1 2 b) ）。
+((match:list (list (match:eqv 'a) (match:segment '(??x)) (match:eqv 'b)) '((a 1 2 b 3)) (match:new-dict) result-receiver) #f 这是一次失败，因为在输入数据中没有任何东西可以与b后面的3匹配。
+dictionary
+
+我们将使用的 dictionary 只是一个头部的绑定列表。每个绑定是一个包含变量的名字、它的值和它的类型的列表。
+(define(list(match:new-dict) 'dict)) (define (match:bindings dict) (cdr dict)) (define (match:new-bindings dict bindings) (cons 'dict bindings)) (define (match:extend-dict var value dict) (match:new-bindings dict (cons (match:make-binding var value) (match:bindings dict)))) (defining (match:lookup var dict) (let((name (if (symbol? var）var (match:var-name var)))) (find (lambda (binding) (eq? name (match:binding-name binding)) (match:bindings dict)))) (define (match:make-binding var value) (list (match:var-name var) value (match:var-type var)) (define match:binding-name car) (define match:binding-type caddr) (define match:binding-value （简单通用程序'match:binding-value 1 cadr）) 访问器 match:binding-value 只是 cadr，但被做成通用的，以允许未来的扩展。这在支持4.5节的代码中是需要的。
+
+4.3.1 编译模式 我们可以用一个基本编译器从模式中自动构建模式匹配器。编译器产生一个适合于它所给的模式的匹配程序作为它的值，它的接口与上面给出的基本匹配器完全相同。
+匹配过程的接口对于组成匹配器来说是很方便的，但是对于人类来说并不十分友好。对于玩匹配器来说，使用以下接口更为方便：（定义（run-matcher match-procedure datum succeed）（match-procedure（list datum）（match:new-dict）（lambda (dict n) (and (= n 1) (success dict))))) 通过这个接口，我们隐藏了关于匹配程序的几个细节：我们将传入的数据包在一个列表中；我们检查该列表中的一个元素（数据）是否已经被匹配；我们提供初始字典。
+一些简单的例子是。(run-matcher (match:compile-pattern '(a ((?b) 2 3) (?b) c)) '(a (1 2 3) 2 c) match:bindings) #f (run-matcher (match:compile-pattern '(a ((?b) 2 3) (?b) c)) ' (a (1 2 3) 1 c) match:bindings) （（b 1？） 正如我们之前所看到的，一些涉及段变量的模式可能以多种方式匹配，我们可以通过失败回到匹配器中选择下一个模式来获得所有的匹配，直到它们都被用完：（运行匹配器（匹配：编译模式 '(a (? ? x) (? y) ?x) (?y) (?x) c)) '(a b b b b c) print-all-matches) ((y (b b b b) ? ?) (x () ? ?) ((y (b b) ? ?) (x (b b) ? ?) ((y () ? ?) (x (b b) ? ?) #f 可能的匹配要求(??x)的两个实例都要匹配相同的数据。
+过程print-all-matches打印出绑定的数据，并强制执行失败。
+(define (print-all-matches dict) (pp (match:bindings dict)) #f）为了制作这个编译器，我们需要定义模式变量的语法。现在我们有一个非常简单的语法：一个模式变量是由类型(?或?)和名称组成的列表。
+(define (match:var-type var) (car var)) (define (match:var-type? object) (memq object match:var-types)) (define match:var-types '(??)) (define (match:named-var? object) (and (pair? object) (match:var-type? (car object)) (n:>= (length object) 2) (symbol? (cadr object)))) (define (match:element-var? object) (and (match:var? object) (eq? '? (match:var-type object)))) (define (match:segment-var? object) (and (match:var? object) (eq? '?? (match:var-type object)))) 这段代码比人们想象的要复杂，因为我们将在第4.5节和一些练习中扩展变量的语法。
+(define match:var-name (simple-generic-procedure 'match:var-name 1 (constant-generic-procedure-handler #f))) (define-generic-procedure-handler(match-args match:named-var?) cadr) match:var-name 默认处理程序是一个总是返回错误的程序，此时只有一个实质性处理程序，它检索了一个命名变量的名称。
+我们还使决定其参数是否为匹配变量的谓词成为通用的，尽管此时唯一满足 match:var? 的对象是命名变量。
+(define match:var? (simple-generic-procedure 'match:var? 1 (constant-generic-procedure-handler #f))(定义generic-procedure-handler match:var? (match-args match:named-var?) (constant-generic-procedure-handler #t)) 编译器将模式映射到相应的匹配器： (define (match:compile-pattern pattern) (cond ((match:var?pattern) (case (match:var-type pattern) ((?) (match:element pattern)) ((??) (match:segment pattern)) (else (error "未知var类型：" pattern)))) ((list? pattern) (match:list (map match:compile-pattern pattern)) (else ; constant (match:eqv pattern)))) 通过改变这个编译器，我们可以以任何我们喜欢的方式改变模式的语法。
+(run-matcher (match:compile-pattern '(a ((?b) 2 3) (?b) c)) '(a (1 2 3) 1 c) match:bindings) ((b 1 ? )
+
+练习4.5：回溯 在第177页的例子中，我们通过从成功过程print-all-matches中返回#f来获得多个匹配。这可能是很神秘的。它是如何工作的？请用一个简短而清晰的段落解释一下，匹配序列是如何产生的。
+4.3.2 匹配变量的限制 通常我们要限制可以被模式变量匹配的对象的种类。例如，我们可能想制作一个模式，其中一个变量只能匹配一个正整数。我们在第4.2.1节的术语重写系统中使用的一种方法是，允许变量携带一个谓词来测试数据的可接受性。例如，我们可能对寻找正弦函数的正整数幂感兴趣。我们可以把我们想要的模式写成如下。'(expt (sin (? x)) (? n ,exact-positive-integer?)) 我们不能对这样的模式使用简单的引号，因为谓词表达式（这里是exact-positive-integer? ）必须在被包含在模式中之前被评估。如同术语重写（第4.2节），我们使用反引号机制来实现这一点。
+为了使匹配器能够检查数据是否满足这样的谓词，我们给 match:element : (定义 (match:element variable) (定义 (element-match data dictionary succeed) (和 (pair? data) (match:satisfies-restriction? variable (car data)) (让 ((binding (match:lookup variable dictionary)) (如果 binding (和 (equal? (match:binding-value binding) (car data)) (successful dictionary 1)) (successful (match:extend-dict variable (car data) dictionary) 1))))) element-match) (define (match:satisfies-restriction? var value) (or (not (match:var-has-restriction? var)) ((match:var-restriction var) value))
+
+练习4.6: 模式的选择：选择是好的 扩展我们的模式语言的一个有趣方法是引入一个选择操作符。(?:choice pattern ...) 这应该可以编译成一个匹配器，它试图按照从左到右的顺序匹配每个给定的模式，返回第一个成功的匹配，如果没有匹配，则返回#f。(这应该让你想起正则表达式 "交替"（见第40页），但 "选择 "这个名字在模式匹配中更为传统。) 例如：(run-matcher (match:compile-pattern '(?:choice a b (?x) c)) 'z match:bindings) ((x z ?)) (run-matcher (match:compile-pattern '(?y) ( ?:choice a b ( ? x ,string?) (?y ,symbol?) c))) '(z z) match:bindings) ((y z ?)) (run-matcher (match:compile-pattern '(?:choice b (? x ,symbol?)) 'b print-all-matches) () ((x b ?) #f 要做的。为这个新的模式模式实现一个新的匹配器过程，即 match:choice。适当地增加模式编译器的功能。
+练习4.7：模式中的命名 另一个扩展是提供命名模式，类似于Scheme的letrec。
+命名允许更短、更模块化的模式，同时也支持递归子模式，包括相互递归的子模式。
+例如，模式：(?:pletrec ((odd-even-etc (?:choice () (1 (?:ref even-odd- etc)))) (even-odd-etc (?:choice () (2 (:ref odd-even- etc)))))) (?:ref odd-even-etc))应该匹配以下形式的所有列表（包括空列表）：（1 (2 (1 (2 (1 ...))))) 在这里，?:pletrec引入了一个相互递归的模式定义块，而?:ref则替代了一个已定义的模式（以便将这种引用与字面符号如a和模式变量如（? x）区别开来）。
+要做的是。实现这些新的?:pletrec和?:ref模式。一种方法是实现新的匹配器程序，即 match:pletrec 和 match:ref，然后适当地增加模式编译器。其他方法也可能有效。如果你的方法是微妙的或不明显的，请简要地解释一下。
+要思考（在你做之前！）。在一个适当的基于环境的letrec-like实现中，嵌套的?:pletrec实例会引入明显的轮廓线来进行范围划分。但是我们的模式匹配器的控制结构并不容易做到。
+匹配器程序以从左到右的深度优先顺序遍历模式和数据，将每个不同的模式变量(如(?x))的第一次文本出现绑定到其相应的数据上，然后将模式中的每个后续文本出现作为一个约束实例。这是通过深度优先的控制路径将字典穿起来实现的。请特别注意在 match:list 的主体中出现的 new-dictionary。这个控制结构，从本质上讲，决定了每个独特的模式变量的最左边、最深处的实例是一个隐式全局命名空间中的定义实例，所有随后出现的下游实例都是约束性实例。
+所以在这个练习中，我们不要担心这种范围上的复杂性。
+具体来说，就像模式变量都共享一个共同的全局命名空间一样，你的模式定义也可以共享。
+当然，如果你真的很有野心，你可以通过重写所有现有的匹配器接口来实现词法范围，接受一个额外的模式-环境参数。但这是另一个时间和地点的工作（在练习 4.9）。
+练习 4.8: 用我们自己的绳索吊起来 表面上看，扩展这个匹配器系统以允许矢量模式和矢量数据似乎很容易。但是我们在设计这个匹配器时做了一个很强的假设--它是一个关于列表数据的列表模式匹配器。
+a. 如果要把这段代码从这个假设中解放出来，以便你能做出一个包含两种复合数据的匹配器，需要做什么？或者任意的序列？需要什么样的变化？你需要改变匹配程序的接口吗？ b. 让它变成这样！（这是一项大量的工作）。(这是大量的工作。)
+
+练习 4.9: 一般模式语言 即使在练习 4.7 中增加了 ?:pletrec 和 ?:ref，我们的模式匹配器也不是一种完整的语言，因为它不支持命名空间范围和参数化模式。例如，我们不能写出下面的模式，它的目的是只匹配同音字的符号列表。
+(?:pletrec ((palindrome (?:pnew (x) (?:choice () ((?x ,symbol?) (?:ref palindrome) ( ? x)))))) (?:ref palindrome)) 为了以任何合理的方式工作，?:pnew创建了新的词义范围的模式变量，这些变量只能在?:pnew的正文中被引用。
+一个完全可行的模式语言是一个很好的子系统，但它不容易建立。
+要做的是。充实这个想法，产生一个完整的模式语言。不适合胆小的人! 4.4 统一匹配 如我们所说，模式匹配是一种结构化数据项之间的平等测试。它是平等检验的一种概括，因为我们允许数据的某些部分是未指定的，通过允许模式变量与数据的未指定部分匹配。但是，我们要求同一模式变量的每一次出现都必须匹配同等的数据。
+到目前为止，我们的匹配器都是单方面的：我们将带有变量的模式与不包含变量的数据进行匹配，产生一个字典--从模式中的每个变量到数据的匹配部分的映射。如果我们把每个变量的匹配值替换成原始模式，我们就会产生一个模式的替换实例。由此产生的实例总是等同于原始数据。
+我们即将消除数据没有变量的限制：我们将允许匹配的两边都有变量。这种强大的匹配方式被称为统一。统一成功的结果也是一个字典，但是变量的值可能包含变量，而且字典不一定能给出模式中每个变量的值。如果我们把字典中与变量相关的值替换成出现在两个给定模式中的任何一个的变量，我们就会得到两个初始模式的一个替换实例。这个可能包含变量的替换实例被称为模式的统一器。统一体是两个模式的最一般的共同替换实例：两个模式的任何其他共同替换实例都是统一体的替换实例。统一器是唯一的，直到变量的重命名，所以统一是很好的定义。罗宾逊（J. A. Robinson）在他发明的著名的定理证明的解决程序中首次描述了统一性[104]。gn）Franklin）（? bdate）（（? dmo）（? dday）1790））（定义b'（（Ben Franklin）（（? bmo）6 1705）（apr 17（? dyear))))（定义c'（（Ben（? fn））（jan（? bday）1705）（apr 17（? dyear)))) 两个表达式的统一将给我们提供一个由匹配得出的变量值的字典。我们可以使用这个字典来构造这两个模式的unifier。(unifier a b) ((Ben Franklin) ((? bmo) 6 1705) (apr 17 1790)) (unifier a c) ((Ben Franklin) (Jan (?bday) 1705) (apr 1790)) (unifier b c) ((Ben franklin) (Jan 6 1705) (Apr 17 (?dyear))) 这些结果中的每一个都比任何来源所提供的部分信息更全面。我们可以进一步结合这三个来源来得到一个完整的信息：（unifier a（unifier b c））（（ben franklin）（Jan 6 1705）（apr 1790））（unifier b（unifier a c））（（ben franklin）（Jan 6 1705）（apr 1790））（unifier c（unifier a b））（（ben franklin）（Jan 6 1705）（apr 1790）) 通常情况下，表达式中的变量之间存在着约束。
+例如，同一个变量可能有多个实例，这些实例必须保持一致，就像下面的推导一样：（定义加法-互换性'(= (+ (?u) (?v)) (+ (?v) (? u)))) (unifier '(= (+ (cos (?a)) (exp (?b))) (?c)) 加法-通约性) (= (+ (cos (?a)) (exp (?b))) (+ (exp (?b)) (cos (? a)))))
+
+4.4.1 统一是如何进行的 我们可以把统一看成是一种方程求解。如果我们把模式看作是结构化的部分信息，那么，统一它们就是检验这两个模式是关于同一事物的部分信息这一命题。为了使模式统一，相应的部分必须统一。因此，统一是在相应部分之间建立方程，并求解未知数（每个模式中未指定的信息片段）。
+这个过程类似于我们解决数字方程的方式。我们的目标是尽可能多地消除方程中的变量。其结果是一个被消除的变量的表达式的替换列表。任何替换的表达式都不能指代任何被消除的变量。我们在方程中寻找一个可以用其中的一个变量进行求解的方程。对一个变量的求解将其隔离，找到一个不包含该变量的等价表达式。我们通过用新发现的值（等价表达式）替换所有出现的变量来消除该变量，包括在剩余的方程中以及在替换列表中与先前被消除的变量相关的值。然后我们将新的替代值添加到替代列表中。我们不断重复，直到不再有方程需要解决或遇到矛盾为止。
+其结果要么是一个成功的替换列表，要么是一份关于矛盾的报告。
+
+在统一中，"方程 "是两个输入模式相应部分的匹配，而 "替换列表 "是字典。实现统一的一种方法是走输入模式的共同结构。与单边匹配一样，模式由列表结构表示。如果在匹配的任何一边遇到了一个变量，它就会在字典中被绑定到另一边的数据上。
+如果一个变量在原始模式中出现了多次，那么后面的每次出现都必须与第一次出现的变量所绑定的值相匹配。这是通过这样一个事实来保证的：每次遇到一个变量，都会在字典中查找，如果有一个与该变量的绑定，就会用它的值来代替该变量。
+另外，每次有新的绑定并输入字典时，新的绑定就会被用来替换字典中其他变量的值中所有新消除的变量实例。
+为了得到两个模式的统一体，我们将它们统一起来，得到替换的字典，如果它们可以被统一的话。如果不能，unify返回#f，表示失败。然后，该字典被用来实例化其中一个模式；选择哪个模式并不重要。
+过程 match:dict-substitution 将模式表达式 pattern1 中与 dictionary dict 绑定的变量的每个实例替换为 dictionary 中的值。
+(定义 (unifier pattern1 pattern2) (let ((dict (unify pattern1 pattern2))) (and dict ((match:dict-substitution dict) pattern1)))) unifier的主要接口是unify，它返回成功匹配的字典结果，如果匹配不成功则返回#f。
+(define (unify pattern1 pattern2) (unify:internal pattern1 pattern2 (match:new-dict) (lambda (dict) dict) ）) unify:internal入口点对匹配过程提供了更多的控制。它需要两个要统一的模式，一个可能有一些绑定的 dictionary，以及一个如果匹配成功将被调用的 success continuation ( succeed) 。
+上面由 unify 提供的 success 续段只是返回字典。在第 4.4.4 节中，当我们添加代码来试验模式中的分段变量时，我们将能够通过从 succeed 返回 #f 来提取多个匹配，表明结果不是我们想要的那个。回溯到匹配器的能力也简化了其他有趣的语义扩展，例如将代数表达式和方程求解纳入匹配过程。6 在unify:内部，要统一的模式，pattern1和pattern2被包裹在列表中。统一程序将逐条比较这些列表，建立一个字典，使相应的术语相等。如果两个列表中的术语同时被用完，则匹配成功。在顶层，在unify:internal中，术语列表只包含两个给定的模式，但中央统一程序unify:dispatch将递归到模式中，把模式的子模式作为术语列表进行比较。
+
+(define (unify:internal pattern1 pattern2 dict succeed)
+((unify:dispatch (list pattern1) (list pattern2))
+dict
+(lambda (dict fail rest1 rest2)
+(or (and (null? rest1) (null? rest2)
+(succeed dict))
+(fail)))
+(lambda () #f)))
+
+过程unify:dispatch接收两个输入术语列表，是递归下降匹配器的核心。匹配过程取决于术语列表的内容。例如，如果两个术语表都以常数开始，如(ben franklin)和(ben (? fn))，则必须对常数进行比较，只有当常数相等时才能进行匹配。如果一个术语列表以变量开始，另一个可以以任何术语开始，并且变量必须与它所匹配的术语绑定。(如果两个都是变量，其中一个变量将被淘汰，而另一个则被淘汰）。因此，如果一个术语表是((?bmo) 6 1705)，另一个是(jan (?bday) 1705)，那么变量(?bmo)必须被绑定到值jan上才能进行匹配。如果两个术语列表都以不是变量的列表开始，那么匹配必须递归地匹配相应的子列表，然后再继续匹配给定术语列表的其余部分。
+例如，在统一本-富兰克林例子中的b和c时，在第一个术语被匹配后，字典中包含了fn与franklin的绑定，剩下的术语列表是(((? bmo) 6 1705) (apr 17 (? dyear))和((jan (? bday) 1705) (apr 17 (? dyear))。这两个术语列表都是以列表开始的，所以匹配必须递归以比较子列表((? bmo) 6 1705)和(jan (? bday) 1705)。
+由 unify:dispatch 返回的过程 unify-dispatcher 需要三个参数：一个字典，一个成功的续集，和一个失败的续集。如果两个术语列表都用完了，则匹配成功。如果有更多的术语需要匹配，通用程序 unify:gdispatch 会调用一个适当的匹配程序，该程序取决于两个术语列表的内容。如果匹配成功，这意味着两个术语表的初始术语可以相对于给定的字典进行统一。因此，成功的续程被调用，其中有新的字典dict*，新的失败续程fail*，以及输入列表中未匹配的尾部，rest1和rest2。然后通过递归调用 unify:dispatch 来匹配这些尾巴。
+
+(define (unify:dispatch terms1 terms2)
+(define (unify-dispatcher dict succeed fail)
+(if (and (null? terms1) (null? terms2))
+(succeed dict fail terms1 terms2)
+((unify:gdispatch terms1 terms2)
+dict
+(lambda (dict* fail* rest1 rest2)
+((unify:dispatch rest1 rest2) dict* succeed
+fail*))
+fail)))
+unify-dispatcher)
+
+通用程序 unify:gdispatch 有用于上述情况的处理程序：匹配两个常量，匹配两个术语表，以及匹配一个变量到某个东西。(因为它是通用的，所以它可以被扩展为新的匹配类型。)默认的处理程序是 unify:fail，用于处理常量与术语列表的匹配。
+
+(define (unify:fail terms1 terms2)
+(define (unify-fail dict succeed fail)
+(fail))
+unify-fail)
+(define unify:gdispatch
+(simple-generic-procedure ’unify 2 unify:fail))
+
+在这个统一体中，术语表是逐一匹配的，所以处理程序的工作就是匹配两个术语表的第一个术语。因此，一个处理程序的适用性只取决于每个术语表的第一个术语。为了简化适用性规范，我们引入了car-satisfies，它接收一个谓词并产生一个新的谓词，确保列表中存在第一个术语，并且该术语满足参数谓词。
+(define (car-satisfies pred) (lambda (term) (and (pair? terms) (pred (car terms)))))) 任何不是匹配变量或列表的术语都是一个常量。
+常数只在它们相等时才匹配：（定义（unify:constant-terms terms1 terms2）（让（（first1（car terms1））（rest1（cdr terms1））（first2（car terms2））（rest2（cdr terms2）））（定义（unify-stants dict succeed fail）（如果（eqv? first1 first2）（ succeed dict fail rest1 rest2）（失败）））unify-stants））（定义（constant-term? term） (and (not (match:var? term)) (not (list? term)))) (define-generic-procedure-handler unify:gdispatch (match-args (car-satisfies constant-term? )) unify:constant-terms) 处理程序unify:list-terms是真正发生递归递减的地方。因为每个术语列表的第一个术语本身是一个列表，匹配器必须递归以匹配这些子列表。如果子列表的匹配成功，则必须继续与其余的输入术语列表匹配。(注意，只有当两个子列表的所有术语都匹配时，递归匹配才会成功；所以传递给成功延续的未匹配的子列表尾部将是空的，被忽略)。
+
+(define (unify:list-terms terms1 terms2)
+(let ((first1 (car terms1)) (rest1 (cdr terms1))
+(first2 (car terms2)) (rest2 (cdr terms2)))
+(define (unify-lists dict succeed fail)
+((unify:dispatch first1 first2)
+dict
+(lambda (dict* fail* null1 null2)
+(succeed dict* fail* rest1 rest2))
+fail))
+unify-lists))
+(define (list-term? term)
+(and (not (match:var? term))
+(list? term)))
+(define-generic-procedure-handler unify:gdispatch
+(match-args (car-satisfies list-term?)
+(car-satisfies list-term?))
+unify:list-terms)
+
+到目前为止，我们的代码实现了递归下降和常数的匹配。明显的矛盾，如匹配两个不同的符号或一个符号到一个列表，都会产生失败。为了解决有趣的方程，我们必须能够用变量来匹配术语。当我们找到变量时，我们可以在字典中添加新的绑定项。方程解算器中处理变量的部分是过程 maybe-substitute。
+程序 maybe-substitute 得到一个以变量开头的术语列表 var-first。它将该变量与第二个术语表的第一个术语相匹配，术语。
+如果一个变量与它自己相匹配，我们就有一个同义词，并且匹配成功，字典没有变化。如果这个变量已经有了一个值，我们就用它的值来替换这个变量，并将得到的列表与术语列表中的术语进行匹配。最后，如果变量没有值，我们可以使用 do-substitute 来消除它，它负责在可能的情况下添加 var 到 term 的绑定。
+(define (maybe-substitute var-first terms) (define (unify-substitute dict succeed fail) (let ((var (car var-first)) (rest1 (cdr var-first)) (term (car terms)) (rest2 (cdr terms)) (cond ((and (match:element-var? term) (match:vars-equal? var term) ) (success dict fail rest1 rest2)) ((match:has-binding? var dict) ((unify:dispatch (cons (match:get-value var dict) rest1) terms) dict succeed fail)) (else (let ((dict* (do-substitute var term dict))) (if dict* (success dict* fail rest1 rest2) (fail))))))) unify-substitute) 在do-substitute中我们首先使用旧词典来清理传入术语，用其值替换任何先前消除的变项。然后，我们检查是否对var可以匹配的对象有任何限制。最后，我们检查var在清理后的术语（term*）中的任何出现。8 如果我们的匹配通过了所有这些测试，我们就会建立一个新的字典，其中包括var与被清洁的术语的新绑定。新字典中的绑定值也必须清理掉对var的引用。
+(define (do-substitute var term dict) (let ((term* ((match:dict-substitution dict) term)) (and (match:satisfies-restriction? var term*) (or (and (match:var? term*) (match:vars-equal? var term*)) (not (match:occurrence-in? var term*))( match:extend-dict var term* ( match:map-dict-values ( match:single-substitution var term*) dict))))) 现在我们知道了如何处理变量，我们只需要在我们的通用调度程序中安装这个处理程序。这里唯一的微妙之处在于，要消除的变量可能出现在任一术语列表中。我们必须保证包含该变量的术语表是 maybe-substitute 的第一个参数。
+(define (element? term) (any-object? term)) (define-generic-procedure-handler unify:gdispatch (match-args (car-satisfies match:element-var? ) (car-satisfies element? )) (lambda (var-first terms) (maybe-substitute var-first terms))(define-generic-procedure-handler unify:gdispatch (match-args (car-satisfies element?) (car-satisfies match:element-var?) (lambda (terms var-first) (maybe-substitute var-first terms))) 在这一点上，我们有一个完整的、正确的、合格的传统统一体。9 它是用通用程序编写的，所以它可以很容易地被扩展到与其他类型的数据一起工作。而且，只需做少量的工作，我们就可以添加语义上的附件，比如以符号+和*开头的列表的互换性。正如我们将看到的，我们还可以增加对新种类的语法变量的支持，如段变量。但在这之前，我们先看看一个真正的应用：类型推理。
+练习4.10: 统一向量 这个统一器可以扩展到处理由其他数据类型组成的数据和模式，比如向量。制作向量的处理程序，而不需要将向量转化为列表（简单的方法！）。
+练习 4.11: 统一字符串 扩展统一处理器以允许统一字符串。这可能很有趣，但你需要发明一种语法机制来表示字符串中的变量。这是很微妙的，因为你可能要用一个字符串表达式来表示一个字符串变量。
+这就涉及到引号问题--请尽量不要发明一个巴洛克式的机制。另外，要确保你不做假设，以免以后引入字符串段变量。(参见第209页的练习4.21）。
+
+练习4.12：变量限制 我们增加了对变量限制的支持，就像我们在单边匹配器中做的那样：我们只是在过程do-substitute中的主条件中加入了一个这样的条款。但是有一些微妙的问题。
+如果一个受限变量与另一个受限变量相匹配，应该发生什么？当变量第一次被绑定到它的目标上时，在通过限制条件后，它被统一消除。但是限制条件随后就会丢失，防止它在匹配的后面部分杀死不合适的人。
+你的任务是了解这些问题并确定如何改善它们。这对你可能考虑的任何应用会有多重要？是否有一个很适合我们实施策略的解决方案？练习4.13：用模式组合器进行统一？与我们先前的单边模式匹配器不同，我们的统一匹配器并没有将模式编译成匹配程序，而这些匹配程序组合起来就可以为模式建立一个匹配程序。但是，一个匹配程序的系统有可能更有效率，因为它避免了在匹配时对模式的语法分析。统一匹配器能否以类似的方式分解？如果不能，为什么不能？这样做是个好主意吗？如果不能，为什么不呢？如果可以，那就做吧! (这很难！) 4.4.2 应用。类型推理 统一匹配的一个经典应用是类型推理：给定一个程序和关于程序部分的一些类型信息，推导出关于程序其他部分的类型信息。
+例如，如果我们知道<是一个接受两个数字参数并产生一个布尔值的过程，那么如果我们分析表达式(g (< x (f y))) 我们可以推断出f和g是单项程序；g接受一个布尔参数；f返回一个数值；而x有一个数值。如果用这些信息来推断表达式所嵌入的程序的属性，我们就可以了解到关于该程序的大量信息。下面是对表达式的分析：（pp (infer-program-types '(g (< x (f y))))) (t (? type:17) ((t (type:process ((boolean-type) (?类型:17)) g) (t (布尔型) ((t (类型:程序 ((数字型) (数字型) (boolean-type)) <) (t (数值型) x) (t (数值型) ((t (type:process ((?y:12)) (numeric-type)) f) (t (? y:12) y))))))) 这是给定表达式的抽象树，用类型做了注释。每个子表达式x都被扩展为一个类型化的表达式，其形式为（t type x）。例如，对g的引用有这样的类型：（类型：程序（（布尔型）））。(?类型:17)) 正如预期的那样，g是一个接受布尔参数的过程，但是我们没有关于其值的信息。未知的值类型由模式变量（? type:17）表示。
+让我们考虑一个更实质性的例子：（定义foo（推断程序类型'(define fact (lambda (n) (begin (define iter (lambda (product counter) (if (> counter n) product (iter (* product counter) (+ counter 1)))))) (iter 1 1)))))) foo中的结果是相当冗长的。所以我们用一个简化器来看，把它变成 "人类可读的 "形式。
+(pp (simplify-annotated-program foo)) (begin (define fact (lambda (n) (declaration-type n (numeric-type)) (define iter (lambda (product counter) (declaration-type product (numeric-type)) (declaration-type counter (numeric-type))（如果（> counter n） product （iter （* product counter） （+ counter 1))))) （ declare-type iter （类型：程序（（ numeric (numeric-type))) (iter 1 1))(declaration-type fact (type:procedure ((numeric-type)) (numeric-type)))) 这里我们看到，类型推理程序能够确定阶乘程序的完整类型--它是一个接受一个数字输入并产生一个数字输出的过程。
+在声明中报告了这一点：（声明-类型 fact (type:procedure ((numeric-type)) (numeric-type))) 内部定义iter的类型也已经确定：它接受两个数字参数并产生一个数字结果。
+(声明-类型 iter (type:procedure ((numeric-type) (numeric-type)) (numeric-type))) 另外，每个内部变量的类型已经确定，并且已经发布了适当的声明：（声明类型n（数值型））（声明类型乘积（数值型））（声明类型计数器（数值型））。
+
+4.4.3 类型推理如何工作 类型推理的过程有四个阶段。
+1. 给定的程序被注释为程序的所有子表达式的类型变量。
+2. 2.根据程序的语义结构来制定类型变量的约束条件。
+3. 3. 统一约束条件，以消除尽可能多的变量。
+4. 4.使用通过统一约束条件而产生的字典对注释程序进行专门化，使之成为一个新的注释程序，其类型注释包含约束条件。
+这个计划在这个程序中实现：（定义（推断-程序-类型expr）（让（（texpr（注释-程序expr）））（让（（约束（程序-约束texpr）））（让（（dict（统一-约束）））（如果dict（（匹配：dict-substitution dict）texpr）'***类型-错误**))))) 如果程序表达式不能被一致地类型化，这个程序会抱怨。然而，它没有给出关于失败原因的解释；这可以通过在失败延续中传回信息来实现。
+注释 程序的注释是通过通用程序annotate-expr实现的，以方便扩展新的语言特性。
+(定义 (annotate-program expr) (annotate-expr expr (top-level-env))) (定义 annotate-expr (simple-generic-procedure 'annotate-expr 2 #f) annotate-expr过程为类型变量的绑定提供了一个环境。它被初始化为下面创建的顶层环境。
+有一些简单的处理程序用于注释简单类型的表达式。如果一个明确的数字作为子表达式出现，它将被赋予一个常量类型，由（numeric-type）构造：（define-generic-procedure-handler annotate-expr (match-args number? any-object?) (lambda (expr env) (make-texpr (numeric-type) expr)) 过程make-texpr从一个类型和一个表达式构造一个类型化的表达式。它的部分可以用texpr-type和texpr-expr来选择。
+然而，我们可能事先不知道一个标识符的类型，它是由一个符号表示的。过程get-var-type试图在环境中找到标识符的类型，如果失败，则为标识符在该词法上下文中的所有出现的类型注释创建一个唯一的类型变量：（define-generic-procedure-handler annotate-expr (match-args symbol? any-object?) （lambda （expr env） （make-texpr （get-var-type expr env） expr）））。我们可能知道一些标识符的类型，比如语言的原始程序。这些都是在顶层环境中提供的。这里显示的原始过程有过程类型，有类型常量（例如。(numeric-type) )作为它们的参数和值： (define(list(top-level-env) (make-top-level-env-frame)) (define (make-top-level-env-frame) (let ((binary-numerical (let ((v (numeric-type))) (procedure-type (list v v) v)) (boolean-type))))) (list (cons '+ binary-numerical) ...
+(cons '= binary-comparator) (cons '< binary-comparator) ...)) 对于一个条件表达式，为条件表达式的值创建一个类型变量，并且每个子表达式都被递归注释：（define-generic-procedure-handler annotate-expr (match-args if-expr? any-object?) (lambda (expr env) (make-texpr (type-variable) (make-if-expr (注释-expr (if-predicate expr) env) (注释-expr (if-consequent expr) env) (注释-expr (if-alternative expr) env))))) 每种表达式都有注释处理程序。我们不会展示所有的，但是lambda表达式的注释很有趣：（define-generic-procedure-handler annotate-expr (match-args lambda-expr? any-object?) (lambda (expr env) (let ((env* (new-frame (lambda-bvl expr) env))) (make-texpr (process-type (map (lambda (name) (get-var-type name env*) ) (lambda-bvl expr)) (type-variable））（make-lambda-expr（lambda-bvl expr）（annotate-expr）（lambda-body expr） env*)))))) 就像在解释器或编译器中一样，lambda表达式的注释制作了一个新的环境框架来保存关于绑定变量的信息；在这种情况下，我们为每个绑定变量创建一个类型变量。我们为lambda表达式的值创建一个过程类型，其中有我们刚刚为绑定变量创建的类型变量和为值创建的类型变量，并且我们递归地注释主体。
+
+约束 程序-约束程序根据程序的语义结构对类型变量制定约束。
+它也是通过一个通用程序来实现的，该程序对每个表达式类型都有处理程序。
+(define (program-constraints texpr) (program-constraints-1 (texpr-type texpr) (texpr-expr texpr))(define program-constraints-1 (simple-generic-procedure 'program-constraints-1 2 #f)) 这个通用程序需要两个参数：一个表达式的类型和表达式本身。它返回一个关于它在研究表达式时发现的类型的约束列表。它在表达式树上行走，在可能发现的地方发现并制定类型约束。
+下面是条件语句的处理程序：（define-generic-procedure-handler program-constraints-1 （match-args type-expression? if-expr? ) (lambda (type expr) (append (list (constrain (boolean-type) (texpr-type (if-predicate expr))) (constrain type (texpr-type (if-consequent expr)) (constrain type (texpr-type (if-alternative expr)))) (program-constraints (if-predicate expr) ) (program-constraints (if-consequent expr) ) (program-constraints (if-alternative expr))))) 这个处理程序制定了三个类型的约束，它将这些约束添加到它在条件的三个子表达式中递归制定的约束。第一个约束是，谓词表达式的值是一个布尔值。第二个和第三个约束是，条件的值的类型与结果表达式的值和替代表达式的值的类型相同。
+这些约束表示为等式：（define (constrain lhs rhs) '(= ,lhs ,rhs)）（标识符lhs和rhs分别是 "左手边 "和 "右手边 "的助记符）。lambda表达式的类型约束是，由lambda表达式的过程返回的值的类型与它的主体的值的类型相同。这与为主体制定的约束相结合。
+(define-generic-procedure-handler program-constraints-1 (match-args type-expression? lambda-expr?) (lambda (type expr) (cons (constrain (procedure-type-codomain type) (texpr-type (lambda-body expr))) （程序约束（lambda-body expr))))) 对过程调用的约束是：操作者的类型是过程类型，操作数表达式的类型与过程的参数类型相匹配，过程返回的值的类型是调用的类型。
+
+(define-generic-procedure-handler program-constraints-1
+(match-args type-expression? combination-expr?)
+(lambda (type expr)
+(cons (constrain (texpr-type (combination-operator expr))
+(procedure-type
+(map texpr-type
+(combination-operands expr))
+type))
+(append
+(program-constraints (combination-operator expr))
+(append-map program-constraints
+(combination-operands expr))))))
+
+统一 每个发现的约束都是两个类型表达式的方程。
+所以我们现在有一组方程需要解决。这可以通过统一每个方程的左手边（lhs）和右手边（rhs）来实现。所有这些统一必须在相同的变量绑定上下文中进行，以便同时解决它们。由于两个列表的统一统一了列表中的相应元素，我们可以直接将约束合并为一个巨大的统一：（定义（unify-constraints constraints）（统一（map constraint-lhs constraints）（map constraint-rhs constraints））。然后，unify-constraints返回的字典被infer-program-types（在第196页）用来实例化类型化的程序。
+批评 尽管这个小的类型推理系统是统一的一个很好的示范，但它在类型推理方面并不是很好：它并没有很好地处理程序。例如，考虑一下简单的情况：（pp (infer-program-types '(begin (define id (lambda (x) x)) (id 2)))) 这显然是正确的，返回(t (numeric-type) (begin (t (type:process ((numeric-type) (numeric-type)) (define id (t (type:process ((numeric-type)) (numeric-type)) (lambda (x) (t (numeric-type) x))))) (t (numeric-type) ((t (type:process ((numeric-type) (numeric-type)) id) (t (numeric-type) 2))))) 但是请注意，身份存储过程的类型是有一个数字参数和一个数字值，因为该过程是用一个数字参数。然而，身份存储过程的正确类型不应该要求任何特定类型的参数。
+更一般地说，一个过程的类型不应该取决于它在一个例子中的使用。这种混淆会导致对一段完全合理的代码进行类型化的失败。(infer-program-types '(begin (define id (lambda (x) x) ) ) (id 2) (id #t))) ***类型错误*** 练习4.14：程序 上面的评论中显示的具体问题并不难解决，但一般情况下却很复杂。我们如何处理作为参数传递并作为值返回的程序？请记住，在程序中可能存在自由变量，这些自由变量在定义程序的地方被词法绑定。
+为这个问题制定一个修复方案，并尽可能使其具有一般性。
+
+练习4.15：参数化类型 这个练习考察了如何将这个类型推理系统扩展到参数化类型的工作。例如，Scheme map程序对任何类型的对象列表进行操作。
+a. 要扩展这个系统以支持参数类型，必须做些什么？这种扩展是否需要我们修改统一器？如果是，请解释为什么需要。如果不需要，请解释为什么不需要。
+b. 实现允许使用参数化类型所需的修改。
+练习 4.16: 联合类型 我们在这里概述的类型推理系统没有对联合类型的任何支持。例如，加法运算符+是为数字运算而定义的。但是如果我们希望+既是数字的加法，又是字符串的连接，该怎么办？这种扩展是否需要我们修改联合器？如果是，请解释为什么需要这样做。如果不需要，请解释为什么不需要。
+b. 实现允许使用联合类型所需的修改。注意：这并不容易。
+练习4.17：副作用 我们在这里概述的类型推理系统对纯函数式程序是足够的。它是否可以优雅地扩展到有赋值的程序中去？如果你认为可以，请解释并演示你的设计。如果你认为不行，请解释你的理由。
+这并不容易。这可能是一个很好的学期项目来理解这个问题并使其发挥作用。
+练习4.18：这实用吗？我们对类型推理的实现实用吗？ a. 估计一下注释和约束阶段的时间和空间随着被分析程序的大小而增长的顺序。
+b. 使用所示算法，估计巨型统一阶段的时间和空间的增长顺序。最著名的统一算法是什么？(这需要在图书馆进行一些研究。) c. 是否有办法将巨大的统一阶段分解成几个部分，使整体有更好的渐进行为？
+
+4.4.4 添加分段变量--一个实验! 在统一体中添加段变量是令人兴奋的：我们并不确定我们会得到什么。10 但是我们对泛型程序的谨慎使用将确保在没有添加分段变量的情况下依赖于统一体行为的程序（比如类型推理的例子）不会因为这个实验而产生错误的答案。事实上，以通用程序的方式组织统一体，使得这样的实验相对来说没有什么问题。
+ 11 使用谓词进行调度控制了元素变量和段变量之间的互动。例如，段变量可以将一个元素变量纳入它所积累的段中，但元素变量可能没有段变量作为它的值。因此，我们必须改变我们对谓词元素? (的定义（在第192页），以排除分段变量。
+
+(define (element? term)
+(not (match:segment-var? term)))
+
+我们需要通用的处理程序来处理分段变量的情况。unify:gdispatch 处理以分段变量开始的术语列表的方法是 maybe-grab-segment ，它的安装方法如下。已知包含分段变量的列表总是作为 maybe-grab-segment 的第一个参数被传递（就像我们对 maybe- substitute 所做的那样）。12
+
+(define-generic-procedure-handler unify:gdispatch
+(match-args (car-satisfies match:segment-var?)
+(complement (car-satisfies match:segment-
+var?)))
+(lambda (var-first terms)
+(maybe-grab-segment var-first terms)))
+(define-generic-procedure-handler unify:gdispatch
+(match-args (complement (car-satisfies match:segment-var?))
+(car-satisfies match:segment-var?))
+(lambda (terms var-first)
+(maybe-grab-segment var-first terms)))
+
+在匹配两个分别以分段变量开始的术语表时，有一个特殊情况需要处理：如果两个列表都以相同的分段变量开始，我们就可以不做进一步的工作而否定这个同义词。否则，我们就有可能得到一个以任一变量开始的匹配。但是也有这样的情况：根据变量在模式中的进一步出现情况，一个变量可以得到很好的匹配，而另一个变量则不能。为了确保我们不会错过从其中一个变量开始的匹配，我们通过在第一次失败的情况下尝试另一个顺序来使匹配变得对称。
+(define (unify:seg-var-var var-first1 var-first2) (define (unify-seg-var-var dict succeed fail) （如果 (match:vars-equal? (car var-first1) (car var-first2)) (success dict fail (cdr var-first1) (cdr var-first2)) ((maybe-grab-segment var-first1 var-first2) dict succeed (lambda () ((maybe-grab-segment var-first2 var-first1) dict succeed fail))))) unify-seg-var-var) （定义-通用程序处理程序 unify:gdispatch （匹配-args（car-满足 match:seg-var？ ) (car-satisfies match:seg-var?)) unify:seg-var-var) 过程 maybe-grab-segment 类似于用于元素变量的过程 maybe-substitute （在第 191 页）。unify:segment-var-var处理了将段变量与自身匹配的情况；所以maybe-grab-segment首先检查var-first开头的段变量是否有值。如果有，我们就用它的值来替换这个变量，并将得到的列表与术语列表中的术语相匹配。因为段变量的绑定是它所吞噬的元素的列表，所以我们使用append来替换段变量的值。匹配未绑定的段变量这一更复杂的工作被交给了 grab-segment。
+(define (maybe-grab-segment var-first terms) (define (maybe-grab dict succeed fail) (let ((var (car var-first))) (if (match:has-binding? var dict) ((unify:dispatch (append (match:get-value var dict) (cdr var-first) ) terms) dict succeed fail ((grab-segment var-first terms) dict succeed fail)))) maybe-grab) 这个过程中，抓取段匹配和追溯实际发生。术语列表被分成两部分：一个初始段和其余的术语（term*）。初始段（initial）开始是空的，term*是整个术语列表。匹配试图通过与initial绑定的段变量进行。如果失败了，那么失败的延续就会尝试用从terms*移到initial的元素进行匹配。这样重复进行，直到匹配成功或者整个术语列表的匹配失败。
+
+(define (grab-segment var-first terms)
+(define (grab dict succeed fail)
+(let ((var (car var-first)))
+(let slp ((initial ’()) (terms* terms))
+(define (continue)
+(if (null? terms*)
+(fail)
+(slp (append initial (list (car terms*)))
+(cdr terms*))))
+(let ((dict* (do-substitute var initial dict)))
+(if dict*
+(succeed dict* continue (cdr var-first)
+terms*)
+(continue))))))
+grab)
+
+这似乎是制作一个具有实验性扩展的分段变量的统一器所需要的全部内容。对于分段变量，我们必须期望得到多个匹配。我们可以拒绝一个匹配项，迫使程序回溯，以获得一个替代项。注意，每个字典条目是一个包含变量名称、值和变量类型的列表。
+我们可以把unifier作为一个单边匹配器。例如，正好有两种方法可以将分配律模式与给定的代数表达式相匹配，正如我们所看到的：13 (让((模式 '(* (??a) (+ (?b)) (??c)) (expression '(* x y (+ z w) m (+ n o) p)) (unify:内部模式表达 (match:new-dict) (lambda (dict) (pp (match:bindings dict)) #f))((c (m (+ n o) p) ?) (b (z w) ?) (a (x y) ?) ((c (p) ?) (b (n o) ?) (a (x y (+ z w) m) ?)) #f 这两个字典都产生相同的替换实例：(* x y (+ z w) m (+ n o) p) 但在代数操纵器中，我们确实需要这两个字典，因为它们每个都代表了分配律的不同应用。
+当分段变量与包含分段变量的列表相匹配时，事情就变得更加复杂和不明确了：（让（（p1 '(a (??x) (??y) (?x) c)）（p2 '(a b b (??w) b b c)）（统一：内部p1 p2（匹配：新字典）（lambda （dict）（pp （匹配：绑定的dict））。#f))((y (b b b (??w) b b) ?) (x () ?) ((y (b b (?w) b b) ?) ((y (b (?w) b) ?) (x (b b)? ) (y () ?) (x (b b b) ?) ((y ((?w) ) ?) (x (b b) ?) ((y () ?) (w () ?) (x (b b) ?) ((w ((?y) ) ?) (x (b b) ?) #f 显然，有很多方法可以使这个匹配。但许多字典实际上是构造同一替换实例的不同方法。为了清楚地看到这一点，我们在每种情况下都构建了替换实例：（让（（p1 '(a (?x) (?y) (?x) c)）（p2 '(a b b b (? w) b b b c)) (unify:internal p1 p2 (match:new-dict) (lambda (dict) (and dict (let ((substitution (match:dict-substitution dict)) ) (let ((p1* (substitution p1)) (p2* (substitution p2)) (if (not (equal? p1* p2*) (error "Bad dictionary")) (pp p1*)))) #f))(a b b b (??w) b b b c) (a b b b (?w) b b b c) (a b b b b (?w) b b b c) (a b b b b (?w) b b b c) (a b b b b b (? y) b b b c) (a b b b b c) #f 所以我们看到，每一个 "解决方案 "都是一个有效的解决方案，即找到变量的值，将其替换回给定的模式中，使模式相同的问题。在这种情况下，有五个解决方案是等价的。这五个是最一般的统一体，它们是唯一的，直到变量的重新命名。其他四个并不是尽可能的通用。但是，统一应该是产生两个输入模式的唯一的最一般的共同替换实例，直到变量的重命名。因此，通过分段，这个非常有用的模式匹配器并不是一个真正的统一器。
+实际上，问题还更严重一些。有一些完全好的匹配，这个程序却没有发现。下面是一个例子：;;;一个丢失的匹配! (unify:internal '(((?x) 3) ((?x))' ((4 (?y)) (4 5)) (match:new-dict) (lambda (dict) (pp (match:bindings dict)) #f)) #f 但是这些表达式确实是匹配的，有以下绑定：((x (4 5) ??) (y (5 3) ??)) 多么可悲啊! 但这个故事有一个寓意。使用通用程序，我们可以对一个正确的算法进行可能有问题的扩展，而不影响其对未扩展的算法的使用的正确性。即使不满足未扩展算法的正确性要求，这些扩展也可能对某些目的有用。
+
+练习4.19：我们能解决这些问题吗？我们在统一包含分段变量的模式时有一个问题。我们可能会错过一些匹配；我们可能会产生同一解决方案的多个副本；有些解决方案虽然是使输入模式相等的有效解决方案，但并不是最大限度的通用。让我们考虑一下如何解决这个问题。
+a. 为unify:internal编写一个包装器，收集所有的解决方案。如果你使用赋值，这并不难，但寻找一个函数式的解决方案可能会更有趣--但不要太努力！ b. 现在你有了所有的解决方案，消除重复的就很容易了。创建从每个解决方案中替换到输入的结果。你可以检查这两个替换的结果是否相等--这是对解题算法正确性的检查。现在为每个不同的结果保存一个替换和一个结果的配对。要小心。变量的名称并不重要，所以如果你能通过统一重命名另一个变量得到一个结果，那么两个结果字典就代表了同一个解决方案。
+c. 如果集合中的任何结果是另一个结果的替换实例，那么它就不是两个输入的最普通的特殊化。
+编写谓词 substitution-instance? 来过滤掉这些结果。
+现在你只剩下这个算法将产生的最普遍的特殊化的集合。返回这些。
+d. 想出一个办法来避免像上面显示的 "A missing match!"那样的缺失匹配。是否有一个简单的代码扩展，可以处理这种匹配？注意：这是一个极其困难的问题。
+练习4.20：更一般的匹配 除了上面显示的讨厌的问题之外，还有一个有趣的微妙之处，没有被unifier解决。考虑下面的问题：(unifier '((?X) 3) '(4 (?Y)) (4 3)在这里我们看到了一个完美的匹配，但它并不是可能的最普遍的一个。问题是，在4和3之间可以有任何数量的东西。一个更好的答案是：(4 (??z) 3) 弄清楚如何得到这个答案。这需要对统一函数进行重大扩展。
+练习4.21：带段的字符串 如果你没有做练习4.11（第193页），现在就做吧。但在这里，我们希望你能添加字符串段变量。这在匹配DNA的片段时很有用!
+
+4.5 图上的模式匹配 迄今为止，我们所开发的模式匹配是用于匹配列表结构。这种结构对于表示表达式是非常好的，比如代数表达式或计算机语言表达式的抽象语法树。然而，模式匹配可以用来制作在更广泛的数据上操作的系统。如果感兴趣的结构可以通过可及性关系来描述，那么将该结构描述为代表 "场所 "的节点和代表描述场所如何相互连接的 "路径元素 "的图形可能是合适的。一个电路就是这样一个结构的例子，其中电路部件和电路节点是地方，可及性关系只是对互连的描述。象国际象棋或跳棋这样的棋盘游戏是另一个例子，棋盘上的方块可以用图中的节点表示，方块的相邻关系可以用图中的边表示。
+我们将把图实现为一个节点和边的集合。
+我们的图是不可改变的，也就是说，一旦添加了一个节点或一条边，它就不能被修改；只有通过添加更多的节点和边才能改变图。这将产生我们将在第4.5.4节看到的后果。
+一个节点包含一个边的集合，而一个边是一个标签和一个值的组合。边缘的标签是一个在eqv下唯一的对象，通常是一个符号或一个数字。边缘的值是一个Scheme对象，通常是另一个节点。
+这个实现适用于具体图（在我们建立图的时候，所有的节点和边都是可用的）和懒惰图（在访问时，图在必要时被扩展）。在更简单的线性序列世界中，一个列表是一个具体的图，而一个流是一个懒惰的图，在被引用时生成。
+我们将首先看一个简单的例子，看看图是如何工作的。
+然后我们将使用一个扩展的例子，即国际象棋裁判，来探索图和图上模式匹配的更复杂用途。
+4.5.1 作为图的列表 我们从简单而熟悉的列表世界开始。cons单元格是节点，将用g:cons制作，其car和cdr将被实现为用car和cdr标记的边，并由g:car和g:cdr访问：（定义（g:cons car cdr）（让（（pair（make-graph-node 'pair)）) (pair 'connect! 'car car) (pair 'connect! 'cdr cdr) pair)) (定义 (g:car pair) (pair 'edge-value 'car)) (定义 (g:cdr pair) (pair 'edge-value 'cdr)) 为了将列表表示为图形，我们需要一个特殊的列表结束标记：(define nil (make-graph-node 'nil)) (define (g:null) nil) (define (g:null? object) (eqv? object nil) 列表到列表图的转换是： (define (list->graph list) (if (pair? list) (g:cons (car list) (list->graph (cdr list)) (g:null))而一个简单的例子也能如愿以偿：(define g (list->graph '(a b c))(and (eqv? 'a (g:car g)) (eqv? 'b (g:car (g:cdr g))) (eqv? 'c (g:car (g:cdr (g:cdr g)))) (g:null? (g:cdr (g:cdr g)))))) #t 我们可以修改list-graph构造函数以允许懒惰图，节点在边被遍历时被创建： (define (list->lazy-graph list) (if (pair? list) (g:cons (delay (car list) ) (delay (list->lazy-graph (cdr list)))) (g:null)) 这里我们使用Scheme [109] delay来构造一个承诺，当承诺被强制执行时，将评估被延迟（推迟）的表达。流[13]（懒惰列表）通常使用延迟和强制来构造。
+4.5.2 实现图
+
+我们必须能够制作图形节点，并通过边把它们与其他节点连接起来。我们将把一个图节点表示为一个捆绑程序：一个可以通过名称调用的委托程序的集合。
+
+(define (make-graph-node name)
+(let ((edges ’()))
+(define (get-name) name)
+(define (all-edges) (list-copy edges))
+(define (%find-edge label)
+(find (lambda (edge)
+(eqv? label (edge ’get-label)))
+edges))
+(define (has-edge? label)
+(and (%find-edge label) #t)) ; boolean value
+(define (get-edge label)
+(let ((edge (%find-edge label)))
+(if (not edge)
+(error "No edge with this label:" label))
+edge))
+(define (edge-value label)
+((get-edge label) ’get-value))
+(define (connect! label value)
+(if (has-edge? label)
+(error "Two edges with same label:" label))
+(set! edges
+(cons (make-graph-edge label value) edges)))
+(define (maybe-connect! label value)
+(if (not (default-object? value))
+(connect! label value)))
+(bundle graph-node? get-name all-edges has-edge?
+get-edge edge-value connect! maybe-connect!)))
+
+make-graph-node的参数是新节点的名称；这在打印节点对象时显示。bundle宏的第一个参数是生成的bundle将满足的一个谓词。
+在这种情况下，它被定义为（define graph-node? (make-bundle-predicate 'graph-node)) 我们将不显示其他捆绑谓词的定义，因为它们是相似的。
+边缘也被表示为捆绑程序。一个边可以有一个具体的值，或者该值可以是一个承诺（通过延迟构建），当被问及时产生该值。后者提供了懒惰的图结构。
+(define (make-graph-edge label value) (define (get-label) label) (define (get-value) (if (promise? value) (force value) value)) (bundle graph-edge? get-label get-value) 练习 4.22: 更多的懒惰图 我们已经展示了如何制作具体列表和懒惰列表。那么，一些更有趣的结构呢？也许有一棵可动态扩展的树会很好。
+例如，一棵游戏树就可以用这种方式来构建：我们可能想在资源可用的情况下在广度和深度上对这棵树进行阐述。举一个这样的树的例子，它可以随着每一层考虑到更多合理的棋步而被扩展，也可以随着更多层次的考虑而被添加。
+4.5.3 图上的匹配 我们可能想在图上搜索有趣的特征。做到这一点的一个方法是尝试将模式与图相匹配。一个图的模式可以指定一个节点和边的交替序列：一个路径。这样的模式可以通过从一个节点开始，并试图遵循该模式所指定的路径来匹配。
+例如，想象一下，我们有一个棋盘和象棋棋子。棋盘上的方块是一个图的节点。代表相邻方块的节点通过边连接到一个给定的节点。我们可以用罗盘的方向来标记这些边，即：北、南、东、西、东北、东南、西北、西南。向北走是朝着棋盘的黑方，向南走是朝着棋盘的白方。
+鉴于这样的安排，我们可以指定一个马可以在北-北-东方向移动的棋步。(define basic-knight-move '((? source-node ,(occupied-by 'knight)) north (?) north (?) east (? target-node ,maybe-opponent)) 这个模式与我们在前几节中看到的模式有几个共同特点：元素变量由? 字符引入；它们可以有名字（例如，源节点）；它们可以有限制（例如，(occupied-by 'knight)）。我们引入语法（？）来表示匿名元素变量。
+模式匹配从源节点开始，穿越两条标有北方的边--有我们不关心的节点--最后向东走，到达目标节点。我们把这种模式称为路径模式，或者在国际象棋的背景下，称为移动模式。
+当然，这只是一个可能的马步。但是我们可以通过对称性产生所有可能的马的移动：我们可以将马的移动反映到东西方向，我们可以将其顺时针旋转90度，我们可以将其旋转180度：（定义所有马的移动（对称性移动 basic-knight-move reflect-ew rotate-90 rotate-180）) 对称-移动程序应用了这三种对称的所有可能组合来产生八种棋步。对于我们使用的变换来说，对称变换的应用顺序并不重要。
+(define (symmetriz-move move . transformations) (let loop ((xforms transformations) (moves (list move))) (if (null? xforms) moves (loop (cdr xforms) (append moves (map (rewrite-path-edges (car xforms)) moves)))))) 其中rewrite-path-edges将其参数用于移动中的每个边缘标签，产生一个具有替换的边缘标签的新移动。
+这种对称性转换的一个例子是
+
+(define (reflect-ew label)
+(case label
+((east) ’west)
+((northeast) ’northwest)
+((northwest) ’northeast)
+((southeast) 'southwest)
+((southwest) 'southeast)
+((west) ’east)
+(else label)))
+
+而其他的是罗盘方向的类似重绘。
+由此产生的所有马的移动列表是（（来源北（？）北（？）东目标）（来源北（？）北（？）西目标）（来源东（？）东（？）南目标）（来源东（？）东（？）北目标）（来源南（？）南（？ 西目标）（源南（？）南（？）东目标）（源西（？）西（？）北目标）（源西（？）西（？）南目标）），在这里我们用源和目标取代了限制性的源和目标节点变量，从而简化了打印。
+马的移动在国际象棋中是很特别的，因为马可以在朋友或对手占据的位置上移动，以到达目标位置。车、象和王不能通过被占领的方格，但它们在前往目标方格的路上可以通过许多未被占领的方格。我们需要一种方法来指定这样的重复遍历。我们使用(* ...)来指定一个重复的遍历：(define basic-queen-move '((?source-node ,(occupied-by 'queen)) (* north (?* ,unoccupied)) north (? target-node ,maybe-opponent))) 皇后可以通过任何数量的未被占领的位置向北移动到目标位置。符号(?* ...)是一种新的模式变量，只能在(* ...)模式内使用。
+像一个简单的模式变量一样，它匹配一个元素，但它不是只保存一个匹配的值，而是收集一个重复中匹配的所有元素的列表。那么女王的所有可能的棋步就是：（define all-queen-moves (symmetrizise-move basic-queen-move rotate-45 rotate-90 rotate-180) 卒的规则更为复杂。卒是（几乎）唯一一个可能的棋子，其行动取决于它的位置或相邻对手的位置。15 卒可以从其初始位置向北走一步或两步，但如果不在其初始位置，它只能向北走一步。卒子可以向东北或西北方向走一步，前提是这步棋要吃掉对手的棋子。最后，倒数第二行的卒子可以走到最后一行，并被提升为任何棋子，通常是皇后。16 练习4.23：填充国际象棋棋步 我们已经展示了如何为马的棋步和皇后的棋步制作棋型，但我们还没有为所有棋子制作棋型。
+a. 车和象的走法与皇后的走法类似，但限制更多：车不能斜向移动，而象只能斜向移动。为所有象的棋步和所有简单的车的棋步制作棋谱。
+b. 卒的棋步要复杂得多。为所有可能的兵棋制定一套棋型（除了过路抓取）。
+c. 为国王非常有限的下法制定一套模式。不要担心攻城或国王不能受制于人的规则。
+d. 攻城是最后一种特殊情况。它同时涉及国王和车。做一套攻城模式。(见脚注15）。
+
+4.5.4 棋盘和备用图形视图 棋盘作为一种图形，包含了一个令人兴奋的想法。我们希望同样的模式对双方都有效。但是描述方向的边是不同的：白方的北边是黑方的南边，白方的东边是黑方的西边！这对主要棋子（车和车）来说没有什么区别。这对于主要棋子（车、马、象、王、后）的对称移动模式来说差别不大，但白方的卒只能向北移动，黑方的卒只能向南移动。在任何情况下，让两位棋手的棋步描述相同是令人愉快的。
+我们希望两位棋手对棋盘图形有不同的看法：我们希望边缘标签的含义是相对于棋手而言的。如果下白棋的棋手看到一条从（代表）A格到B格的北边，我们希望下黑棋的棋手看到一条从B格到A格的北边。
+为了实现这一点，我们引入了图视图。图形视图是一个从一个边缘标签到另一个边缘标签的可逆映射。当图视图应用于一个节点时，它返回该节点的一个副本，其中的边被重新命名。
+在国际象棋的例子中，相关的视图是将棋盘旋转180度。
+
+(define rotate-180-view
+(make-graph-view ’inverse rotate-180 rotate-180))
+
+其中make-graph-view制作一个图形视图。过程graph-name-view对一个节点应用一个视图。
+((graph-note-view node view ) 白方将直接看到一个节点，而黑方将看到通过rotate-180-view投影的同一个节点。考虑到这个图，所有的操作对白方和黑方都是一样的。
+使用图视图可以解决相对寻址的问题，即我们要看一个给定节点的邻居。但我们也需要做绝对寻址，即通过行和列指定要找的节点。每种颜色都希望看到类似的寻址，即主行是0，而对手的主行是7；同样，每种颜色都认为最左边的列是0，最右边的是7。
+我们来做一个棋盘。下面的代码是专门针对国际象棋的，因为我们并不专注于制作一个抽象的领域。我们做一个8×8的节点数组，代表方块，每个方块有一个地址。我们遍历所有可能的方块地址，用一条带有适当标签的边把每个节点和它的邻居连接起来。然后，我们用棋子填满边。
+(define chess-board-size 8)
+((define chess-board-indices (iota chess-board-size))
+((define chess-board-last-index (last chess-board-indices))
+((定义 (make-chess-board)
+((let ((board (make-chess-board-internal)))
+((for-each (lambda (address)
+((connect-up-square address board)) board-addresses)
+((populat-sides board) board)) 
+
+棋盘方块的可能地址都是一对从0到7的整数。
+
+
+((定义board-addresses
+((append-map (lambda (y)
+((map (lambda (x)
+((make-address x y)) chess-board-indices)) chess-board-indices)) 过程make-chess-board-internal将方块的节点数组做成一个行的列表，每个行都是该列的列表。它返回一个捆绑过程，其中有一些操作棋盘的委托。
+(define (make-chess-board-internal)
+((let ((nodes
+((map (lambda (x)
+((map (lambda (y)
+((make-graph-node (string x "," y))) chess-board-indices)) chess-board-indices))
+((let loop ((turn 0)) 请看下面的委托定义。
+(bundle #f node-at piece-at piece-in address-of set-piece-at color next-turn)))) turn变量是当前的回合，从0开始。偶数回合为白色，奇数回合为黑色，如委托程序color所示。
+((define (color) (if (white-move?) ' white 'black))
+((define (white-move?) (even? turn)) 委托过程node-at获得指定地址的节点。
+如果这是一个黑转，它翻译地址并应用节点视图。
+(define (node-at address)
+((define (get-node address)
+((list-ref (list-ref nodes (address-x address))
+((address-y address)))
+((if (white-move?）
+((get-node address)
+((graph-node-view (get-node (invert-address address)) rotate-180-view)) node-at的逆过程是委托程序address-of。每个节点都有一条边，标有地址，以其地址为值。与node-at一样，如果这是一个黑棋，返回的地址必须被翻译。
+(define (address-of node)
+((let ((address (node 'edge-value 'address)))
+((if (white-move?) address
+((invert-address address)))) 委托过程next-turn在走完一步棋后推进棋盘。
+((define (next-turn) (loop (+ turn 1)) 连接方块和它们的邻居的过程中进行了地址运算，以处理（字面的）边缘情况，在每个方块和它的每个邻居之间创建一个标记的边。它还为每个节点创建了地址边。
+(define (connect-up-square address board)
+((let ((node (board 'node-at address)))
+((node 'connect! 'address 地址)
+((for-each-direction
+((lambda (label x-delta y-delta)
+((let ((x+ (+ (address-x address) x-delta) ))
+((y+ (+ (address-y address) y-delta)))
+((if (and (<= 0 x+ chess-board-last-index)
+((<= 0 y+ chess-board-last-index))
+((node 'connect! label
+((board 'node-at
+((make-address x+ y+)))))))))
+((define (for-each-direction procedure)
+((procedure 'north 0 1)
+((程序'东北 1 1)
+((程序'东1 0)
+((程序'东南1-1)
+((程序'南'0 -1)
+((程序'西南-1-1)
+((程序'西部-1 0)
+((程序'西北-1 1)) 一个地址被表示为一个列号和行号的列表。
+
+(define (make-address x y) (list x y))
+(define (address-x address) (car address))
+(define (address-y address) (cadr address))
+(define (address= a b)
+(and (= (address-x a) (address-x b))
+(= (address-y a) (address-y b))))
+(define (invert-address address)
+(make-address (- chess-board-last-index
+(address-x address))
+(- chess-board-last-index
+(address-y address))))
+
+一个棋子由包含其棋子类型和颜色的数据来表示。我们的惯例是，在第n个回合，棋盘上的每个棋子都将通过一条来自该节点的标记为n的边连接到代表它所占据的方块的节点上。这是图形不变性的结果；否则我们可以直接使用副作用来修改该边。为了填充棋盘，我们用一条标记为0的边将每个棋子连接到其初始方格的节点上。
+(define (populat-sides board)
+(define (populat-side color home-row pawn-row)
+(define (do-column col type)
+(add-piece col home-row type)
+(add-piece col pawn-row 'pawn))
+(定义 (add-piece col row type)
+((board 'node-at (make-address col row))
+'connect! 0 (make-piece type color))
+(do-column 0 'rook)
+(do-column 1 'knight)
+(do-column 2 'bishop)
+(do-column 3 'Queen)
+(do-column 4 'King)
+(do-column 5 'bishop)
+(do-column 6 'knight) (do-column 6 'knight)
+(do-column 7 'rook))
+(populate-side 'white 0 1)
+(populate-side 'black 7 6))
+我们现在可以开始游戏了。
+(define the-board)
+(定义 (start-chess-game)
+(set! the-board (make-chess-board))
+(print-chess-board the-board))
+然后我们就得到了这个漂亮的棋盘图像。
+
+4.5.5 国际象棋的移动 现在我们有了一个装满棋子的国际象棋盘，我们需要一种方法来移动这些棋子。如果一个棋子在某个特定的回合中位于某个特定的方格中，代表该方格的节点有一条边，以回合为标签，其值为该棋子。第218页make-chess-board-internal中的以下委托程序与此相关。
+(define (piece-at address)
+(piece-in (node-at address)))
+(define (piece-in node)
+(and (node 'has-edge? turn)
+(node 'edge-value turn)))
+(定义 (set-piece-at address piece)
+((node-at address) 'connect! (+ turn 1) piece))
+我们使用piece-at来获得一个我们期望移动的棋子，给定其地址。当然，检查是否有明显的错误总是一个好主意。
+(定义 (get-piece-to-move board from)
+(让((my-piece (board 'piece-at from)))
+(if (not my-piece)
+(error "No piece in this square:" from))
+(如果 (not (eq? (board 'color) (piece-color my-piece)))
+(错误 "只能移动自己的棋子：" my-piece from)
+我的棋子））。
+为了真正地进行移动，我们把棋子拿起来，并把它放在目标位置上。然而，只有当目标位置是空的，或者被对手的棋子占据了要吃掉的时候，才允许这步棋。
+(定义 (simple-move board from to)
+(让((my-piece (get-piece-to-move board from)))
+(let ((credated (board 'piece-at to)))
+(如果 (not (no-piece-or-opponent? captured my-piece))
+(error "Can't capture piece of same color:" captured)))
+;;这步棋看起来不错，让它变成这样。
+(board 'set-piece-at to my-piece)
+;; 现在更新所有未受影响的棋子到;; 棋盘的下一个状态。
+(for-each (lambda (address)
+(if (not (or (address= from address)
+(address= to address))
+(let ((p (board 'piece-at address)))
+(如果p
+(board 'set-piece-at address p)))))
+董事会地址)
+(board 'next-turn))
+请注意，我们并没有加入检查我们想要移动的棋子是否能够做出那一步。我们对每一种棋子可用的合法棋步的唯一描述是在我们在第4.5.3节中建立的图形模式。在第225页的练习4.24中，我们将解决这个问题。
+但首先，让我们使用匹配器来确定这种路径模式所描述的棋步是否是捕获。
+(define (capture? board from path)
+(let* ((my-piece (get-piece-to-move board from))
+(dict
+(graph-match path
+(match:extend-dict chess-board:var;** board
+(match:new-dict))
+(board 'node-at from))))
+(和dict
+(let* ((target (match:get-value 'target-node dict))
+(捕获(board 'piece-in target))
+(and captured '(capture ,my-piece ,credred,(board 'address-of target))))))))
+由;**标记的行在初始字典中添加了一个特殊的绑定，它被一些需要询问棋盘的模式限制所使用。
+为了方便起见，chess-move用一步棋更新棋盘，然后为下一步棋的棋手打印棋盘。
+(定义 (chess-move from to)
+(set! the-board (simple-move the-board from to))
+(print-chess-board the-board))
+为了演示这段代码，我们可以做一个有趣的局面。
+(定义 (giuoco-piano-opening)
+(start-chess-game)
+(chess-move '(4 1) '(4 3))
+(chess-move '(3 1) '(3 3))
+(chess-move '(6 0) '(5 2))
+(象棋走势 '(6 0) '(5 2))
+(象棋走势 '(5 0) '(2 3))
+(国际象棋-移动 '(2 0) '(5 3)))
+(w: ;b: ;w: ;b: ;w: ;b: p-k4 p-k4 n-kb3 n-qb3 b-qb4 b-qb4
+(Giuoco-piano-opening)
+经过大量的打印，我们得到以下棋盘位置。
+
+此时，国王主教3的白马正在攻击国王5的黑卒。夺取这颗棋子并不是一个好主意，因为它被皇后主教6的黑马所防守，而我们不应该用马来交换卒。然而，我们可以利用马的走法中的图形模式来检查这是否是一个可能的捕获。
+(capture? the-board
+(make-address 5 2)
+'((? source-node ,(occupied-by 'knight))
+北边 (?) 北边 (?)
+西（目标节点，可能是对手））。
+(捕获（白马）（黑卒）（4 4）)
+的确，这是该马唯一可能的捕获。
+(filter-map (lambda (path)
+(捕获? the-board
+(make-address 5 2)
+路径）)
+所有棋步)
+((catch (knight white) (pawn black) (4 4))
+练习4.24: 合法棋步 在第216页的练习4.23中，我们为所有合法棋步建立了一个棋型库。修改简单移动程序（第222页）以检查被移动的棋子是否被允许以所要求的方式移动。
+
+4.5.6 实现图形匹配 使用图形模式的入口是。
+(定义 (graph-match path dict object)
+((gmatch:compile-path) object dict
+(lambda (object* dict*)
+dict*)))
+我们将路径模式编译成一个匹配过程，该过程需要从图对象（一个节点）开始，一个初始字典和一个成功延续。如果模式成功地匹配了以该节点为起点的边的序列，它就调用成功续程，该续程接收匹配路径末端的节点（对象*）和匹配中积累的绑定字典，如第4.3节所述。18 如果模式不能匹配给定的对象，匹配过程返回#f。
+我们用于对图进行匹配的模式是一种小语言的表达式，我们希望将其编译为匹配过程。图模式表达式的语法可以用BNF来描述。这里后缀*表示0或更多的出现，后缀+表示1或更多，后缀? 表示0或1的出现。一个infix |表示备选。用""包围的项目是字面字符串。例如，一个匹配单个元素的模式变量以(?开始，有一个可选的名称和可选的谓词，并以)结束。
+<edge> = <edge-label> <target> <edge-label> = <symbol> <target> = <node-var> | <object-var> | <constant> <node-var> = <single-var> <object-var> = <single-var> | <sequence-var> <single-var> = "(?" <var-name>? <unary-predicate>? " ) <sequence-var> = "(?*" <var-name>? <unary-predicate>? ")" <var-name> = <symbol> <path> = <node-var> <path-elements> <path-elements> = <path-element>* <path-element> = <edge> | "(*" <path-elements> ")" ; 重复任意次数 | "(+" <path-elements> ")" ; 至少重复一次 | "(opt" <path-elements> ")" ; 一个或零个实例 | "(或" <ppath-elements>+ ") | "(和" <ppath-elements>+ ")" <ppath-elements> = "(" <path-elements> ")" 在我们的图匹配语言中，图中的每条路径都以一个节点变量开始。节点变量是一个单元素的变量，它满足谓词match:element-var? 我们对路径进行编译，具体如下。
+(定义 (gmatch:compile-path path)
+(if (and (pair? path) (match:element-var? (car path))
+(gmatch:finish-compile-path (cdr path)
+(gmatch:compile-var (car path)))
+(error "Ill-formed path:" path)))
+这里我们检查path的第一个元素是否是一个元素变量；如果是，我们把它编译成一个变量匹配器。路径的其余部分，如果有的话，由finish-compile-path :19编译。
+(define (gmatch:finish-compile-path rest-elts matcher)
+(if (null? rest-elts)
+匹配器
+(gmatch:seq2 matcher
+(gmatch:compile-path-elts rest-elts))))
+其中seq2产生一个匹配程序，按顺序匹配其匹配程序参数。
+
+(define (gmatch:seq2 match-first match-rest)
+(define (match-seq object dict succeed)
+(match-first object dict
+(lambda (object* dict*)
+match-seq)
+(match-rest object* dict* succeed))))
+
+由compile-var产生的变量匹配器match-first将匹配路径的初始节点，然后产生的字典dict*被compile-path-elts ( match- rest) 的结果用来匹配路径的剩余部分，从边缘对象*开始。
+编译路径元素模式的情况只有几种。
+要么路径以边缘标签和目标节点开始，要么以特殊的匹配形式开始（*, +, opt , or , and）。
+(定义 (gmatch:compile-path-elts elts)
+(让((elt (car elts))
+(rest (cdr elts)))
+(cond ((and (symbol? elt) (pair? rest))
+(gmatch:finish-compile-path (cdr rest)
+(gmatch:compile-edge elt (car rest))))
+((pair? elt)
+(gmatch:finish-compile-path rest)
+(gmatch:compile-path-elt elt))
+(否则
+(error "Ill-formed path elements:" elts)))))
+一条边可以由任何符号来标记，这些符号不是图匹配器模式所使用的特殊符号（*、+、opt、或、和）之一。然后，一个简单的标记边缘的匹配器是通过以下方式编译的。
+
+(define (gmatch:compile-edge label target)
+(let ((match-target (gmatch:compile-target target)))
+(define (match-edge object dict succeed)
+(and (graph-node? object)
+(object ’has-edge? label)
+(match-target (object ’edge-value label)
+dict succeed)))
+match-edge))
+
+边缘匹配器，match-edge，检查对象是否是一个图形节点，是否有一条具有给定标签的边缘从该对象发出，以及该边缘的目标（边缘值）将匹配
+(使用match-target）图匹配模式中的目标模式。match-edge中使用的匹配程序match-target是由编译器compile-target做出的。
+编译目标时只有两种可能：一个变量或一个常量。
+(define (gmatch:compile-target elt)
+(if (match:var? elt)
+(gmatch:compile-var elt)
+(让()
+(定义 (match-constant object dict succeed)
+(and (eqv? elt object)
+(success object dict)))
+match-constant)))
+特殊的匹配形式是由compile-path-elt处理的。
+(定义 (gmatch:compile-path-elt elt)
+(let ((keyword (car elt))
+(args (cdr elt)))
+(case keyword
+((*) (gmatch:compile-* args)
+((+) (gmatch:compile-+ args))
+((opt) (gmatch:compile-opt args))
+((or) (gmatch:compile-or args))
+((and) (gmatch:compile-and args))
+(else (error "Ill-formed path element:" elt))))))
+编译一个有可选路径元素的模式的工作原理如下。有一个递归调用compile-path-elts，用路径元素模式来编译可选的路径元素序列，以获得匹配器，即路径中可选元素的匹配器。当match-opt应用于一个图形节点对象时，这些路径元素的匹配器被应用；但如果它失败了，返回#f，则用原始对象和原始字典匹配成功。
+(define (gmatch:compile-opt elts)
+(let ((matcher (gmatch:compile-path-elts elts))
+(define (match-opt object dict succeed)
+(或 (matcher object dict succeed)
+(success object dict))
+match-opt))
+一个有重复路径元素的模式，例如，模式
+(* north (?* ,unoccupied)) in basic-queen-moves on page 215, is compiled like this:
+(define (gmatch:compile-* elts)
+(gmatch:* (gmatch:compile-path-elts elts)))
+至于需要一个可选的路径元素序列的模式，编译器被递归调用，以获得一个可能重复的序列的匹配器，然后将其传递给gmatch:*。
+(define (gmatch:* matcher)
+(define (match-* object dict succeed)
+(或 (匹配器对象dict
+(lambda (object* dict*)
+(match-* object* dict* succeed)))
+(success object dict)))
+匹配-*)
+图模式匹配器match-*试图在提供的图节点对象上使用传递给它的匹配器。如果它成功了，match-*会递归地调用自己，以尝试最后一次匹配所离开的图形部分。最终，它将无法取得进展，在匹配器失败的图对象上取得成功。
+编译需要至少一个但可能是多个重复的路径元素序列的模式，用+表示，与*类似。它和上面一样使用gmatch:*，但首先要求至少有一个匹配元素。
+(定义 (gmatch:compile-+ elts)
+(让((matcher (gmatch:compile-path-elts elts))
+(gmatch:seq2 matcher (gmatch:* matcher)))))
+剩下的特殊路径模式是and和or，每个模式都包含一些子路径模式。一个and元素必须匹配从当前节点开始的所有子路径模式。or元素必须至少匹配从当前节点开始的一个子路径模式。
+
+(define (gmatch:compile-and elt-lists)
+(gmatch:and (map gmatch:compile-path-elts elt-lists)))
+(define (gmatch:compile-or elt-lists)
+(gmatch:or (map gmatch:compile-path-elts elt-lists)))
+
+程序和和或是真正的工作发生的地方。
+(定义 (gmatch:and matchers)
+(lambda (object dict succeed)
+(如果 (null? matchers)
+(assceed object dict)
+(let loop ((matchers matchers) (dict dict))
+((car matchers) object dict
+(如果(null? (cdr matchers))
+成功
+(lambda (object* dict*)
+(循环 (cdr matchers) dict*))))))))
+(定义 (gmatch:or matchers)
+(lambda (object dict succeed)
+(let loop ((matchers matchers))
+(if (pair? matchers)
+(or ((car matchers) object dict succeed)
+(循环(cdr matchers)))
+#f))))
+程序compile-var可以编译一个模式变量。它是由compile-path和compile-target调用的，并且有四种互斥的情况来处理带有或不带有可选的名称和谓词的变量。
+(define (gmatch:compile-var var)
+(cond ((match-list? var gmatch:var-type?）
+(gmatch:var-matcher (car var) #f #f))
+((match-list? var gmatch:var-type? symbol?）
+(gmatch:var-matcher (car var) (cadr var) #f))
+((match-list? var gmatch:var-type? symbol? procedure?）
+(gmatch:var-matcher (car var) (cadr var) (caddr var)))
+((match-list? var gmatch:var-type? procedure?）
+(gmatch:var-matcher (car var) #f (cadr var)))
+(else
+(错误 "Ill-formed variable:" var))))
+过程var-type? 匹配模式变量的类型符号：?或?*。为了识别变量的四种情况，编译- var使用了一个实用程序match-list?，如果它的第一个参数是一个列表，并且列表中的每个元素都满足相应的谓词参数，那么它就是真的。
+(定义 (match-list? datum . preds)
+(let loop ((preds preds) (datum datum))
+(如果 (pair? preds)
+(和 (pair? datum)
+((car preds) (car datum))
+(循环（（cdr preds）（cdr datum）））。
+(null? datum))))
+程序var-matcher是变量的匹配器，现在我们已经解码了它们的语法。
+(define (gmatch:var-matcher var-type var-name restriction)
+(define (match-var object dict succeed)
+(and (or (not restriction)
+(限制对象dict))
+(如果var-name
+(让((dict*)
+(gmatch:bind var-type var-name object dict))
+(和dict*
+(成功对象dict*))
+(成功的对象dict))))
+匹配-var)
+这里 bind 为 var-name 增加了一个与 value object 的绑定，返回一个新的 dictionary。如果字典已经有这样的绑定，而且它的值与 object 不同，bind 返回 #f 表示匹配失败。
+至此，我们完成了图匹配器的工作。
+
+练习4.25：图匹配 这里描述的图匹配器非常有用，但有些问题它并不适合。什么是需要对匹配器进行扩展的有趣问题？找到这样的问题，定义并实现扩展，并在一些例子中演示其用途。
+4.6 小结 模式很有趣，但它们也是一种非常有用的方式，可以组织系统的各个部分进行加法。在这一章中，我们已经看到了如何建立一个术语重写系统。基于规则的术语改写系统使我们很容易编写程序，用 "等价 "的部分连续替换表达式的部分，当没有更多的规则适用时就终止。这种系统是进行符号操作的大型系统的重要组成部分。代数表达式的简化是一种应用，但是编译器也做了大量的这种操作，用来计算优化，有时也用来生成代码。
+我们还看到了一种构建模式匹配器的灵活方式，即把一个模式 "编译 "成所有具有相同接口结构的简单匹配器的组合。这使得我们很容易增加新的功能，并使这样一个系统非常有效。当我们在这样的匹配器中加入段变量，即匹配未指定数量的元素时，我们发现我们必须实现一个回溯系统，因为如果模式有一个以上的段变量，那么对任何特定的数据可能有多种匹配。这使事情变得非常复杂。除了回溯的内在复杂性，模式匹配器中的回溯必须与使用模式的规则执行器中的回溯系统对接。我们将在第5.4节中研究处理回溯的更一般的方法。我们将在7.5.2节中研究更强大的回溯策略。
+如果我们将部分指定的数据建模为带有漏洞的模式
+(由模式变量表示)，那么我们就会发现，我们需要将模式相互匹配，以收集数据上的约束，这样我们就能使规范更加清晰。我们探索了统一：合并这类部分信息结构的过程。这本质上是一种为数据的缺失部分设置和解决符号方程的方式。统一是非常强大的，我们展示了如何以这种方式使用统一来制作一个简单的类型推理引擎。
+我们发现，模式匹配的思想可以扩展到对一般的图进行操作，而不仅仅是层次化的表达。
+这使得我们很容易处理像国际象棋棋盘这样的复杂图形，我们用模式来指定合法的国际象棋动作。
+模式和模式匹配可以是一种表达计算思想的方式，在某些问题上，它比其他编程方法更有启示性。但是要小心：模式匹配不是世界上所有问题的答案，所以我们不要沉迷于此。
+
+1当然，一个非常聪明的匹配者可以推断出y=0，前提是我们处理的是数字。
+2关于这种成功/失败模式的更多例子和解释，见第273页的5.4.2节。
+3这种构建模式匹配器的策略是由Carl Hewitt在其博士论文[56]中首次描述的。
+4对于只有元素变量的模式，统一器是唯一的。
+这是一个定理，我们在此不做证明。在第4.4.4节中，我们将扩展我们的统一器以包括段变量。然而，当模式有分段变量时，统一通常会产生多个匹配。
+5 关于统一化的广泛调查，请参见[6]。
+6在这个统一器的内部，对于一个失败来说，明确地调用一个失败延续是很方便的。但是在unify:internal中，我们过渡到一个不同的惯例来表示失败：从一个成功的延续中返回#f。这是为了使统一器的使用惯例与第4.3节的匹配器的使用惯例相同。这是一个有趣的过渡。
+在第4.2.2节的规则系统中，我们使用了显式的成功和失败延续，所以为了在规则系统中使用匹配器，我们必须进行相反的过渡：匹配器使用#f约定，所以make-rule（第166页）必须实现这个过渡。在回溯系统中实现失败的约定的选择通常是一个风格问题，但使用显式的失败延续通常更容易扩展。幸运的是，实现回溯的这些不同的方式很容易对接。
+7 正如第4.3节中描述的模式匹配系统一样，统一匹配器是围绕术语列表组织的，以允许以后扩展到分段变量。
+8 在统一的文献中，这被称为 "发生检查"。发生检查是用来防止试图获得x = f(x)这样的方程的解。在某些情况下，如果我们对函数f有更多的了解，这样的定点方程可能是可以解决的，但是这个统一器是一个句法匹配器。我们可以在这一点上设置一个钩子，要求一个更强大的方程求解器来帮助我们，但是我们没有这样做。大多数Prolog系统出于效率的考虑，避免实现发生检查。
+9由于统一是如此的重要，已经有大量的工作在开发有效的算法。Memoization可以被用来做大量的改进。关于统一算法的广泛阐述见[6]。
+10 还有一些人在模式匹配器或统一器中加入了分段变量[5]，取得了一些成功。显然，有一些版本的Prolog有分段变量[34]。对一个包括序列变量的算法的详细理论处理
+(段变量的另一个名字)的算法，可以在Kutsia的博士论文中找到[79]。然而，在这里我们并不是要建立一个完整的、正确的片段统一器。我们只是想说明在已经建立的基本统一程序中添加一些有用的新行为是多么容易。
+11 对段的扩展是非常微妙的。我们感谢Kenny Chen, Will Byrd和Michael Ballantyne帮助我们思考这个实验。
+12 程序complement是一个谓词的组合器：complement做出一个新的谓词，是其参数的否定。
+13 这是一个单边的匹配，也可以用早期的匹配器来完成，但是这种匹配两边都有变量的表达式的能力是很有用的。
+14 关于如何使用图形节点的例子，见第210页的g:cons。关于捆绑程序的更完整描述，见第395页。
+15 Castling是另一种特殊情况。攻城在有限的情况下是允许的：当国王和车处于初始位置时，国王和车之间的位置没有被占据，国王没有被牵制，也不会在它被牵制的位置上穿越或着陆。
+16 还有一种兵的走法，即过路吃子，它取决于对手的前一步棋。
+17 我们使用基于零的索引，与传统的国际象棋惯例不同，但除了对棋手的输入和输出，这一点并不重要。
+18 但请注意，图形匹配器过程的成功延续与表达式匹配器过程的成功延续是不同的。表达式匹配器的成功续程需要一个字典和被匹配器吃掉的一些元素（以使分段工作），而图-匹配器的成功续程则需要最后的节点和匹配图的匹配部分所产生的字典。
+19 尽管程序的实际名称是 gmatch:finish- compile-path ，我们缩写这样的名称，以便在文本解释中省略 gmatch: 的前缀。
+
+
