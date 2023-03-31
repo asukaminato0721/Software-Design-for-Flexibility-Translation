@@ -1,6 +1,6 @@
 # SICP3 Translation
 
-By Deepl and a simple python script
+By ~~Deepl and a simple python script~~ chatGPT, https://github.com/yihong0618/bilingual_book_maker
 
 ```python
 from clipboard import copy, paste
